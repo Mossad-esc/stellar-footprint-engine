@@ -243,6 +243,22 @@ type(scope): short description
 | `test` | Adding or updating tests |
 | `chore` | Maintenance, dependency updates |
 
+### Scopes
+
+All commits **must** include a scope from this list:
+
+| Scope | Purpose |
+|---|---|
+| `api` | API endpoints and controllers |
+| `services` | Business logic and service layer |
+| `middleware` | Middleware (auth, logging, caching, etc.) |
+| `config` | Configuration and environment setup |
+| `utils` | Utility functions and helpers |
+| `docs` | Documentation and guides |
+| `infra` | Infrastructure, deployment, Docker, Kubernetes |
+| `tests` | Test suite and test infrastructure |
+| `dx` | Developer experience (tooling, build, linting) |
+
 ### Examples
 
 ```
