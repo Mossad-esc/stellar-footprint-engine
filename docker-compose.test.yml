@@ -1,0 +1,22 @@
+# Docker Compose for integration tests
+# Usage: docker compose -f docker-compose.test.yml up -d
+# Then run: pnpm test:integration
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - test_net
+    command: redis-server --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  test_net:
+    driver: bridge
