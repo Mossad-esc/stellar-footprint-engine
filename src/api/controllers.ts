@@ -1,4 +1,3 @@
-import fs from "fs";
 import path from "path";
 
 import { Network } from "@config/stellar";
@@ -11,7 +10,13 @@ import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
 import { simulateTransaction } from "@services/simulator";
 import { validateXdr } from "@services/validator";
-import { createJob, deliverWebhook } from "@services/webhook";
+import {
+  createJob,
+  deliverWebhook,
+  failJob,
+  getJob,
+  InvalidWebhookUrlError,
+} from "@services/webhook";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { AppError } from "@utils/AppError";
 import { rpcCircuitBreaker } from "@utils/circuitBreaker";
@@ -132,7 +137,7 @@ export async function simulate(
     return next(new AppError(xdrCheck.error!, HTTP_STATUS.BAD_REQUEST));
   }
 
-  const xdrValue = xdr as string;
+  const xdrValue = xdr!;
 
   if (
     network &&
@@ -158,19 +163,71 @@ export async function simulate(
 
   const net: Network = (network as Network) || DEFAULT_NETWORK;
 
+  if (webhookUrl !== undefined) {
+    if (typeof webhookUrl !== "string") {
+      return next(
+        new AppError(
+          "Webhook URL must be a valid HTTPS URL",
+          HTTP_STATUS.BAD_REQUEST,
+        ),
+      );
+    }
+
+    let jobId: string;
+    try {
+      jobId = createJob(webhookUrl);
+    } catch (err: unknown) {
+      const message =
+        err instanceof InvalidWebhookUrlError
+          ? err.message
+          : "Webhook URL must be a valid HTTPS URL";
+      return next(new AppError(message, HTTP_STATUS.BAD_REQUEST));
+    }
+
+    metrics.incrementActiveSimulations();
+    const start = Date.now();
+    try {
+      metrics.recordXdrBytes(Buffer.from(xdrValue, "base64").length);
+    } catch {
+      // ignore — never block the request for a metrics failure
+    }
+
+    void simulateTransaction(xdrValue, net, undefined, ledgerSequence)
+      .then((result) => {
+        const duration = (Date.now() - start) / 1000;
+        metrics.recordSimulation(net, result.success);
+        metrics.recordSimulationDuration(net, duration);
+        return deliverWebhook(jobId, result);
+      })
+      .catch(() => {
+        metrics.recordSimulation(net, false);
+        failJob(jobId);
+      })
+      .finally(() => {
+        metrics.decrementActiveSimulations();
+      });
+
+    res.status(HTTP_STATUS.ACCEPTED).json({
+      accepted: true,
+      jobId,
+      status: "pending",
+    });
+    return;
+  }
+
   metrics.incrementActiveSimulations();
   const start = Date.now();
 
   // Record XDR payload size (decoded byte length)
   try {
-    metrics.recordXdrBytes(Buffer.from(xdr!, "base64").length);
+    metrics.recordXdrBytes(Buffer.from(xdrValue, "base64").length);
   } catch {
     // ignore — never block the request for a metrics failure
   }
 
   try {
     const result = await simulateTransaction(
-      xdr!,
+      xdrValue,
       net,
       res.locals.abortSignal,
       ledgerSequence,
@@ -811,4 +868,27 @@ export function getSimulateHistory(
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
   }
+}
+
+export function getSimulationJob(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const { jobId } = req.params as { jobId?: string };
+
+  if (!jobId) {
+    return next(new AppError("Webhook job not found", HTTP_STATUS.NOT_FOUND));
+  }
+
+  const job = getJob(jobId);
+  if (!job) {
+    return next(new AppError("Webhook job not found", HTTP_STATUS.NOT_FOUND));
+  }
+
+  const response: ResponseEnvelope = {
+    success: true,
+    data: job,
+  };
+  res.status(HTTP_STATUS.OK).json(response);
 }

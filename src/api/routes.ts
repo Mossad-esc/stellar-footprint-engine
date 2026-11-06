@@ -6,6 +6,7 @@ import {
   readiness,
   simulate,
   simulateBatch,
+  getSimulationJob,
   footprintDiffController,
   validate,
   networkStatus,
@@ -47,6 +48,9 @@ router.post("/simulate/dry-run", simulateDryRun);
 
 // GET /simulate/history — return last N simulation results for the caller's IP
 router.get("/simulate/history", getSimulateHistory);
+
+// GET /simulate/jobs/:jobId — inspect async webhook simulation delivery status
+router.get("/simulate/jobs/:jobId", getSimulationJob);
 
 // POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
 router.post("/simulate/batch", simulateBatch);

@@ -659,3 +659,85 @@ describe("POST /api/v1/restore validation", () => {
     });
   });
 });
+
+// ── Async webhook simulation & GET /simulate/jobs/:jobId ───────────────────
+
+describe("Async webhook simulation and job status", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("returns 400 when webhookUrl is not HTTPS", async () => {
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .send({ xdr: VALID_XDR, webhookUrl: "http://example.com/hook" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: "BAD_REQUEST",
+    });
+    expect(res.body.error).toMatch(/HTTPS/);
+  });
+
+  it("returns 202 Accepted with jobId and exposes job status via GET /api/v1/simulate/jobs/:jobId", async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: true }) as unknown as typeof fetch;
+
+    mockSimulateTransaction.mockResolvedValueOnce({
+      success: true,
+      footprint: { readOnly: [], readWrite: [] },
+      contracts: [],
+      contractType: "unknown",
+      ttl: {},
+      optimized: false,
+      rawFootprint: { readOnly: [], readWrite: [] },
+      cost: { cpuInsns: "500", memBytes: "1024" },
+    });
+
+    const submitRes = await request(app)
+      .post("/api/v1/simulate")
+      .send({ xdr: VALID_XDR, webhookUrl: "https://example.com/callback" });
+
+    expect(submitRes.status).toBe(202);
+    expect(submitRes.body).toMatchObject({
+      accepted: true,
+      status: "pending",
+    });
+    expect(typeof submitRes.body.jobId).toBe("string");
+
+    // Allow background promise chain to settle
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const statusRes = await request(app).get(
+      `/api/v1/simulate/jobs/${submitRes.body.jobId as string}`,
+    );
+
+    expect(statusRes.status).toBe(200);
+    expect(statusRes.body).toMatchObject({
+      success: true,
+      data: {
+        jobId: submitRes.body.jobId,
+        webhookUrl: "https://example.com/callback",
+        status: "delivered",
+        attempts: 1,
+      },
+    });
+  });
+
+  it("returns 404 JOB_NOT_FOUND for unknown jobId", async () => {
+    const res = await request(app).get(
+      "/api/v1/simulate/jobs/00000000-0000-0000-0000-000000000000",
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({
+      success: false,
+      error: "Webhook job not found",
+      code: "JOB_NOT_FOUND",
+    });
+  });
+});

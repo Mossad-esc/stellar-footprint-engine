@@ -65,6 +65,8 @@ export enum ErrorCode {
   SIMULATION_RESTORE_REQUIRED = "SIMULATION_RESTORE_REQUIRED",
   SIMULATION_DATA_MISSING = "SIMULATION_DATA_MISSING",
   CIRCUIT_OPEN = "CIRCUIT_OPEN",
+  JOB_NOT_FOUND = "JOB_NOT_FOUND",
+  UNAUTHORIZED = "UNAUTHORIZED",
 }
 
 export const ERROR_MESSAGES = {
@@ -116,6 +118,8 @@ export function getErrorCodeByMessage(
       return ErrorCode.FORBIDDEN;
     case "OpenAPI spec not found":
       return ErrorCode.OPENAPI_SPEC_NOT_FOUND;
+    case "Webhook job not found":
+      return ErrorCode.JOB_NOT_FOUND;
     case "Content-Type must be application/json":
       return ErrorCode.CONTENT_TYPE_INVALID;
     default:

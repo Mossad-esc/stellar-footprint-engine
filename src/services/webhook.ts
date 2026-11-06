@@ -6,6 +6,9 @@ export interface WebhookJob {
   jobId: string;
   webhookUrl: string;
   status: "pending" | "delivered" | "failed";
+  createdAt: string;
+  completedAt?: string;
+  attempts: number;
 }
 
 export class InvalidWebhookUrlError extends Error {
@@ -29,19 +32,41 @@ function isValidHttpsUrl(url: string): boolean {
   }
 }
 
+const MAX_WEBHOOK_JOBS = 1000;
 const jobs = new Map<string, WebhookJob>();
 
 export function createJob(webhookUrl: string): string {
   if (!isValidHttpsUrl(webhookUrl)) {
     throw new InvalidWebhookUrlError(webhookUrl);
   }
+
+  if (jobs.size >= MAX_WEBHOOK_JOBS) {
+    const oldestKey = jobs.keys().next().value;
+    if (oldestKey) {
+      jobs.delete(oldestKey);
+    }
+  }
+
   const jobId = randomUUID();
-  jobs.set(jobId, { jobId, webhookUrl, status: "pending" });
+  jobs.set(jobId, {
+    jobId,
+    webhookUrl,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    attempts: 0,
+  });
   return jobId;
 }
 
 export function getJob(jobId: string): WebhookJob | undefined {
   return jobs.get(jobId);
+}
+
+export function failJob(jobId: string): void {
+  const job = jobs.get(jobId);
+  if (!job) return;
+  job.status = "failed";
+  job.completedAt = new Date().toISOString();
 }
 
 /**
@@ -69,6 +94,7 @@ export async function deliverWebhook(
   const signature = signPayload(payload);
 
   for (let attempt = 1; attempt <= retries; attempt++) {
+    job.attempts = attempt;
     try {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -85,6 +111,7 @@ export async function deliverWebhook(
 
       if (res.ok) {
         job.status = "delivered";
+        job.completedAt = new Date().toISOString();
         return;
       }
     } catch {
@@ -93,4 +120,5 @@ export async function deliverWebhook(
   }
 
   job.status = "failed";
+  job.completedAt = new Date().toISOString();
 }
