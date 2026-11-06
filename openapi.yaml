@@ -114,6 +114,24 @@ paths:
                       failureCount: 0
                 timestamp: "2024-01-01T00:00:00.000Z"
 
+  /simulate/supported-networks:
+    get:
+      tags: [network]
+      summary: List configured RPC networks
+      description: |
+        Returns the list of Stellar networks (`testnet`, `mainnet`, `futurenet`)
+        that currently have RPC URLs configured on the server.
+      operationId: getSupportedNetworks
+      responses:
+        "200":
+          description: Configured networks retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupportedNetworksResponse"
+              example:
+                networks: [testnet, mainnet]
+
   /simulate:
     post:
       tags: [simulation]
@@ -122,6 +140,10 @@ paths:
         Submits a transaction XDR to the Stellar RPC `simulateTransaction` endpoint,
         extracts the footprint (read-only and read-write ledger keys), and returns
         resource cost estimates.
+
+        When `webhookUrl` (HTTPS) is supplied, returns `202 Accepted` with a `jobId`
+        immediately and delivers the simulation payload asynchronously signed with
+        `X-Webhook-Signature` (`sha256=<hmac>`).
 
         Results are cached by a hash of the request body. The `X-Cache` response header
         indicates whether the result was served from cache (`HIT`) or freshly simulated (`MISS`).
@@ -156,6 +178,16 @@ paths:
                 cost:
                   cpuInsns: "1234567"
                   memBytes: "8192"
+        "202":
+          description: Asynchronous simulation queued for webhook delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookAcceptedResponse"
+              example:
+                accepted: true
+                jobId: "6fa459ea-ee8a-3ca4-894e-db77e160355e"
+                status: pending
         "400":
           description: Missing or invalid request body
           content:
@@ -191,6 +223,103 @@ paths:
           $ref: "#/components/responses/InternalServerError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+
+  /simulate/dry-run:
+    post:
+      tags: [simulation]
+      summary: Parse transaction XDR locally without calling RPC
+      description: |
+        Decodes the transaction envelope locally and returns source account, sequence
+        number, and operation metadata without making any Stellar RPC network request.
+      operationId: simulateDryRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateRequest"
+            example:
+              xdr: "AAAAAgAAAAC..."
+              network: testnet
+      responses:
+        "200":
+          description: Transaction XDR parsed locally
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DryRunResponse"
+              example:
+                dryRun: true
+                network: testnet
+                sourceAccount: "GABC..."
+                sequence: "101"
+                operationCount: 1
+                operations:
+                  - type: invokeHostFunction
+                    source: null
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /simulate/history:
+    get:
+      tags: [simulation]
+      summary: Recent simulation history for caller IP
+      description: |
+        Returns up to the last 100 simulation summaries recorded for the caller's IP
+        address within a rolling 24-hour TTL window.
+      operationId: getSimulateHistory
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of history entries to return (1–100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        "200":
+          description: Simulation history retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulateHistoryResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /simulate/jobs/{jobId}:
+    get:
+      tags: [simulation]
+      summary: Inspect async webhook simulation job status
+      description: |
+        Returns delivery status (`pending`, `delivered`, or `failed`), attempt count,
+        and timestamps for an asynchronous webhook simulation job queued via `/simulate`.
+      operationId: getSimulationJob
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          description: Job identifier returned in the `202 Accepted` `/simulate` response
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Webhook simulation job status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookJobResponse"
+        "404":
+          description: Webhook job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                error: "Webhook job not found"
+                code: "JOB_NOT_FOUND"
 
   /simulate/batch:
     post:
@@ -297,17 +426,17 @@ paths:
       summary: Network status
       description: |
         Returns current Stellar network information including the latest ledger sequence
-        and network passphrase. Response is cached for 10 seconds.
+        and network passphrase. When `network` is omitted, queries all configured networks.
+        Response is cached for 10 seconds.
       operationId: getNetworkStatus
       parameters:
         - name: network
           in: query
           required: false
-          description: Network to query
+          description: Network to query (omit to query all configured networks)
           schema:
             type: string
             enum: [testnet, mainnet, futurenet]
-            default: testnet
       responses:
         "200":
           description: Network status retrieved
@@ -316,11 +445,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/NetworkStatusResponse"
               example:
-                success: false
-                error: "Too Many Requests"
-                code: "RATE_LIMIT_EXCEEDED"
-                message: "Rate limit exceeded. Try again in 60 seconds."
-                retryAfter: 60
+                success: true
+                data:
+                  latestLedger: 12345678
+                  passphrase: "Test SDF Network ; September 2015"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /footprint/diff:
+    post:
+      tags: [simulation]
+      summary: Compare two Soroban transaction footprints
+      description: |
+        Computes added and removed read-only and read-write ledger keys between two
+        transaction footprints (`before` and `after`).
+      operationId: diffFootprint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FootprintDiffRequest"
+      responses:
+        "200":
+          description: Footprint diff computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FootprintDiffResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -329,30 +485,37 @@ paths:
       tags: [utilities]
       summary: Validate transaction XDR
       description: |
-        Validates a transaction XDR without simulating it against the network.
-        Use this to detect structural issues (malformed XDR, missing fields) before
-        incurring the cost of a full simulation.
+        Validates a transaction XDR locally without simulating it against the network.
+        Detects malformed XDR, passphrase mismatches, zero/empty operation lists, and
+        emits warnings for non-Soroban operations or `0` sequence numbers.
       operationId: validateXdr
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SimulateRequest"
+              $ref: "#/components/schemas/ValidateRequest"
             example:
               xdr: "AAAAAgAAAAC..."
               network: testnet
       responses:
         "200":
-          description: XDR is valid
+          description: XDR validation completed
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EnvelopeResponse"
+                $ref: "#/components/schemas/ValidateResponse"
               example:
-                success: false
-                error: "Unexpected error"
-                code: "INTERNAL_SERVER_ERROR"
+                success: true
+                data:
+                  valid: true
+                  errors: []
+                  warnings: []
+                  network: testnet
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /decode:
     get:
@@ -362,7 +525,7 @@ paths:
         Decodes a base64-encoded XDR string into a human-readable JSON representation.
         Useful for debugging transaction structures and ledger entries.
 
-        Supported `type` values: `transaction`, `operation`, `ledger_key`.
+        Supported `type` values: `transaction`, `operation`, `ledger_key`, `auth_entry`.
       operationId: decodeXdr
       parameters:
         - name: xdr
@@ -377,10 +540,10 @@ paths:
           required: false
           description: |
             XDR type for decoding. Defaults to `transaction`.
-            Supported values: `transaction`, `operation`, `ledger_key`.
+            Supported values: `transaction`, `operation`, `ledger_key`, `auth_entry`.
           schema:
             type: string
-            enum: [transaction, operation, ledger_key]
+            enum: [transaction, operation, ledger_key, auth_entry]
             default: transaction
       responses:
         "200":
@@ -420,7 +583,7 @@ paths:
               network: testnet
       responses:
         "200":
-          description: Restoration transaction built successfully
+          description: Restoration check completed
           content:
             application/json:
               schema:
@@ -428,8 +591,9 @@ paths:
               example:
                 success: true
                 data:
+                  needsRestore: true
                   restoreXdr: "AAAAAgAAAAD..."
-                  network: testnet
+                  fee: "100"
         "400":
           $ref: "#/components/responses/BadRequest"
         "500":
@@ -464,19 +628,35 @@ paths:
               schema:
                 $ref: "#/components/schemas/EstimateFeeResponse"
               example:
-                success: false
-                error: "Missing required query parameter: xdr"
-                code: "BAD_REQUEST"
-        "422":
-          description: XDR could not be decoded
+                inclusionFee: "100"
+                resourceFee: "2450"
+                totalFee: "2550"
+                network: testnet
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /cache:
+    delete:
+      tags: [utilities]
+      summary: Flush simulation cache
+      description: |
+        Flushes all cached simulation entries from the active cache backend
+        (`redis` or `memory`).
+      operationId: invalidateCache
+      responses:
+        "200":
+          description: Cache invalidated successfully
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CacheInvalidateResponse"
               example:
-                success: false
-                error: "Failed to decode XDR: invalid base64"
-                code: "INVALID_XDR"
+                message: "Cache invalidated"
+                backend: memory
         "500":
           $ref: "#/components/responses/InternalServerError"
 
@@ -496,6 +676,17 @@ paths:
                 additionalProperties: true
 
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Optional API key authentication when `API_KEYS` is configured
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Optional `X-API-Key` header alternative when `API_KEYS` is configured
+
   responses:
     BadRequest:
       description: Missing or invalid request parameters
@@ -673,6 +864,15 @@ components:
       default: testnet
       description: Stellar network to use
 
+    SupportedNetworksResponse:
+      type: object
+      required: [networks]
+      properties:
+        networks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Network"
+
     SimulateRequest:
       type: object
       required: [xdr]
@@ -685,8 +885,147 @@ components:
           $ref: "#/components/schemas/Network"
         ledgerSequence:
           type: integer
+          minimum: 1
           description: Optional ledger sequence to simulate against (for reproducibility)
           example: 12345678
+        webhookUrl:
+          type: string
+          format: uri
+          description: Optional HTTPS callback URL for asynchronous simulation delivery
+          example: "https://hooks.example.com/stellar/simulate"
+
+    ValidateRequest:
+      type: object
+      required: [xdr]
+      properties:
+        xdr:
+          type: string
+          description: Base64-encoded Stellar/Soroban transaction XDR
+          example: "AAAAAgAAAAC..."
+        network:
+          $ref: "#/components/schemas/Network"
+
+    ValidateResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [valid, errors, warnings, network]
+          properties:
+            valid:
+              type: boolean
+            errors:
+              type: array
+              items:
+                type: string
+            warnings:
+              type: array
+              items:
+                type: string
+            network:
+              $ref: "#/components/schemas/Network"
+
+    DryRunResponse:
+      type: object
+      required:
+        [dryRun, network, sourceAccount, sequence, operationCount, operations]
+      properties:
+        dryRun:
+          type: boolean
+          enum: [true]
+        network:
+          $ref: "#/components/schemas/Network"
+        sourceAccount:
+          type: string
+        sequence:
+          type: string
+        operationCount:
+          type: integer
+        operations:
+          type: array
+          items:
+            type: object
+            required: [type, source]
+            properties:
+              type:
+                type: string
+              source:
+                type: string
+                nullable: true
+
+    SimulateHistoryResponse:
+      type: object
+      required: [ip, total, limit, results]
+      properties:
+        ip:
+          type: string
+        total:
+          type: integer
+        limit:
+          type: integer
+        results:
+          type: array
+          items:
+            type: object
+            required:
+              [timestamp, network, success, readOnlyCount, readWriteCount]
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              network:
+                type: string
+              success:
+                type: boolean
+              readOnlyCount:
+                type: integer
+              readWriteCount:
+                type: integer
+
+    WebhookAcceptedResponse:
+      type: object
+      required: [accepted, jobId, status]
+      properties:
+        accepted:
+          type: boolean
+          enum: [true]
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [pending]
+
+    WebhookJobResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [jobId, webhookUrl, status, createdAt, attempts]
+          properties:
+            jobId:
+              type: string
+            webhookUrl:
+              type: string
+              format: uri
+            status:
+              type: string
+              enum: [pending, delivered, failed]
+            createdAt:
+              type: string
+              format: date-time
+            completedAt:
+              type: string
+              format: date-time
+            attempts:
+              type: integer
 
     SimulateBatchRequest:
       type: object
@@ -820,6 +1159,42 @@ components:
         after:
           $ref: "#/components/schemas/Footprint"
 
+    FootprintDiffResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [readOnly, readWrite]
+          properties:
+            readOnly:
+              type: object
+              required: [added, removed]
+              properties:
+                added:
+                  type: array
+                  items:
+                    type: string
+                removed:
+                  type: array
+                  items:
+                    type: string
+            readWrite:
+              type: object
+              required: [added, removed]
+              properties:
+                added:
+                  type: array
+                  items:
+                    type: string
+                removed:
+                  type: array
+                  items:
+                    type: string
+
     # ── Decode ───────────────────────────────────────────────────────────────
     DecodeResponse:
       type: object
@@ -830,7 +1205,7 @@ components:
         type:
           type: string
           description: XDR type used for decoding
-          enum: [transaction, operation, ledger_key]
+          enum: [transaction, operation, ledger_key, auth_entry]
         decoded:
           type: object
           description: Human-readable JSON representation of the XDR

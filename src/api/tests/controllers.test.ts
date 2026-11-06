@@ -395,6 +395,60 @@ describe("GET /api/v1/openapi.json", () => {
       true,
     );
   });
+
+  it("documents all v1 API paths and has no broken internal $ref pointers", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+    expect(res.status).toBe(200);
+
+    const expectedPaths = [
+      "/health",
+      "/health/live",
+      "/health/ready",
+      "/simulate/supported-networks",
+      "/simulate",
+      "/simulate/dry-run",
+      "/simulate/history",
+      "/simulate/jobs/{jobId}",
+      "/simulate/batch",
+      "/simulate/cost-breakdown",
+      "/network/status",
+      "/footprint/diff",
+      "/validate",
+      "/decode",
+      "/restore",
+      "/estimate-fee",
+      "/cache",
+      "/openapi.json",
+    ];
+
+    for (const p of expectedPaths) {
+      expect(res.body.paths).toHaveProperty([p]);
+    }
+
+    const collectRefs = (node: unknown, refs: string[] = []): string[] => {
+      if (Array.isArray(node)) {
+        node.forEach((item) => collectRefs(item, refs));
+      } else if (node && typeof node === "object") {
+        for (const [k, v] of Object.entries(node)) {
+          if (k === "$ref" && typeof v === "string") {
+            refs.push(v);
+          } else {
+            collectRefs(v, refs);
+          }
+        }
+      }
+      return refs;
+    };
+
+    for (const ref of collectRefs(res.body)) {
+      const segments = ref.replace(/^#\//, "").split("/");
+      let target: unknown = res.body;
+      for (const seg of segments) {
+        target = (target as Record<string, unknown> | undefined)?.[seg];
+      }
+      expect(target).toBeDefined();
+    }
+  });
 });
 
 // ── #427: GET /simulate/supported-networks ────────────────────────────────
