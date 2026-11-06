@@ -1,4 +1,5 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
+
 import { Network, getNetworkConfig } from "../config/stellar";
 
 export interface XdrValidationResult {
@@ -13,7 +14,10 @@ export interface XdrValidationResult {
  * @param network - Stellar network (mainnet or testnet)
  * @returns Validation result with valid flag, errors, and warnings
  */
-export function validateXdr(xdr: string, network: Network): XdrValidationResult {
+export function validateXdr(
+  xdr: string,
+  network: Network,
+): XdrValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -63,21 +67,21 @@ export function validateXdr(xdr: string, network: Network): XdrValidationResult 
 
   // 6. Check for at least one invokeHostFunction operation (Soroban operation)
   const hasInvokeHostFunction = ops.some(
-    (op) => op.type === StellarSdk.OperationType.invokeHostFunction
+    (op) => op.type === "invokeHostFunction",
   );
 
   if (!hasInvokeHostFunction) {
-    errors.push("Transaction must contain at least one Soroban invokeHostFunction operation");
+    errors.push(
+      "Transaction must contain at least one Soroban invokeHostFunction operation",
+    );
     return { valid: false, errors, warnings };
   }
 
   // 7. Optional warnings: if there are operations other than invokeHostFunction, we can warn
-  const nonSorobanOps = ops.filter(
-    (op) => op.type !== StellarSdk.OperationType.invokeHostFunction
-  );
+  const nonSorobanOps = ops.filter((op) => op.type !== "invokeHostFunction");
   if (nonSorobanOps.length > 0) {
     warnings.push(
-      `Transaction contains ${nonSorobanOps.length} non-Soroban operation(s); only invokeHostFunction operations are processed`
+      `Transaction contains ${nonSorobanOps.length} non-Soroban operation(s); only invokeHostFunction operations are processed`,
     );
   }
 

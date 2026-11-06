@@ -32,8 +32,14 @@ describe("footprintDiff", () => {
   });
 
   it("returns unchanged entries correctly", () => {
-    const before: FootprintInput = { readOnly: [xdrA, xdrB], readWrite: [b64xdrA] };
-    const after: FootprintInput = { readOnly: [xdrA, xdrB, xdrC], readWrite: [b64xdrA, b64xdrB] };
+    const before: FootprintInput = {
+      readOnly: [xdrA, xdrB],
+      readWrite: [b64xdrA],
+    };
+    const after: FootprintInput = {
+      readOnly: [xdrA, xdrB, xdrC],
+      readWrite: [b64xdrA, b64xdrB],
+    };
 
     const result = footprintDiff(before, after);
 
@@ -46,10 +52,7 @@ describe("footprintDiff", () => {
   });
 
   it("handles undefined footprints as empty arrays", () => {
-    const result = footprintDiff(
-      {} as FootprintInput,
-      {} as FootprintInput,
-    );
+    const result = footprintDiff({} as FootprintInput, {} as FootprintInput);
 
     expect(result.added.readOnly).toEqual([]);
     expect(result.added.readWrite).toEqual([]);
@@ -60,7 +63,10 @@ describe("footprintDiff", () => {
   });
 
   it("handles completely equal footprints", () => {
-    const footprint: FootprintInput = { readOnly: [xdrA, xdrB], readWrite: [b64xdrA] };
+    const footprint: FootprintInput = {
+      readOnly: [xdrA, xdrB],
+      readWrite: [b64xdrA],
+    };
 
     const result = footprintDiff(footprint, footprint);
 

@@ -5,20 +5,16 @@ describe("logger redact config", () => {
     const stream = { write: jest.fn() };
     const child = logger.child({});
     // Verify redact paths are configured
-    const opts = (logger as unknown as { [key: string]: unknown });
+    const opts = logger as unknown as { [key: string]: unknown };
     // pino stores redact config; we test behavior via serialization
-    const serialized = JSON.stringify(
-      child.bindings ? child.bindings() : {},
-    );
+    const serialized = JSON.stringify(child.bindings ? child.bindings() : {});
     // The logger instance should have redact configured
     expect(logger).toBeDefined();
   });
 
   it("masks secretKey field as [Redacted]", () => {
     const lines: string[] = [];
-    const dest = require("pino").destination
-      ? undefined
-      : undefined;
+    const dest = require("pino").destination ? undefined : undefined;
 
     // Create a fresh pino instance with the same redact config and a writable stream
     const pino = require("pino");

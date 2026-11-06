@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^15.1.0",
-    "compression": "^1.8.1",
+    "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -54,11 +54,11 @@
     "tsconfig-paths": "^4.2.0",
     "uuid": "^9.0.1",
     "yaml": "^2.8.3",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.0.1",
-    "@commitlint/config-conventional": "^19.0.0",
+    "@commitlint/config-conventional": "^21.0.1",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",
@@ -101,5 +101,25 @@
   "validate-branch-name": {
     "pattern": "^(main|develop|live)$|^(feature|fix|refactor|hotfix|release|conflict|chore)/.+$",
     "errorMsg": "Branch name must be: main | develop | live\nOr prefixed with: feature/ | fix/ | refactor/ | hotfix/ | release/ | conflict/ | chore/\nExample: feature/my-new-feature"
+  },
+  "pnpm": {
+    "overrides": {
+      "axios": "^1.20.0",
+      "body-parser": "^2.4.0",
+      "brace-expansion@1": "^1.1.21",
+      "brace-expansion@2": "^2.1.7",
+      "brace-expansion@>=3 <6": "^5.0.12",
+      "browserslist": "^4.28.7",
+      "fast-uri": "^3.1.9",
+      "follow-redirects": "^1.16.2",
+      "form-data": "^4.0.6",
+      "handlebars": "^4.7.10",
+      "ip-address": "^10.7.4",
+      "js-yaml@3": "^3.15.2",
+      "js-yaml@4": "^4.3.2",
+      "proxy-addr": "^2.0.8",
+      "qs": "^6.16.1",
+      "toml": "^5.0.1"
+    }
   }
 }

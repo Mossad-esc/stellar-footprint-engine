@@ -10,7 +10,7 @@ import {
 } from "./footprintParser";
 import { optimizeFootprint } from "./optimizer";
 // import { calculateResourceFee } from "./feeEstimator"; // unused
-import { CACHE_TTL, ErrorCode } from "../constants";
+import { CACHE_TTL, CACHE_TTL_MS, ErrorCode } from "../constants";
 import metrics from "../middleware/metrics";
 import { buildCacheKey, getCache } from "../services/cache";
 import {

@@ -1,8 +1,8 @@
 import { jest } from "@jest/globals";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import * as cacheModule from "../../services/cache";
 import { getRpcServer } from "../../config/stellar";
+import * as cacheModule from "../../services/cache";
 import {
   SOROBAN_INVOKE_XDR,
   CLASSIC_PAYMENT_XDR,
@@ -88,23 +88,33 @@ const mockServer = {
   getLedgerEntries: mockGetLedgerEntries,
 };
 
-let mockCacheStore = new Map<string, unknown>();
+const mockCacheStore = new Map<string, unknown>();
 const mockCache = {
   backend: "memory" as const,
-  get: jest.fn().mockImplementation(async (key: string) => mockCacheStore.get(key) ?? null),
-  set: jest.fn().mockImplementation(async (key: string, value: unknown) => { mockCacheStore.set(key, value); }),
-  delete: jest.fn().mockImplementation(async (key: string) => { mockCacheStore.delete(key); }),
-  flush: jest.fn().mockImplementation(async () => { mockCacheStore.clear(); }),
+  get: jest
+    .fn()
+    .mockImplementation(async (key: string) => mockCacheStore.get(key) ?? null),
+  set: jest.fn().mockImplementation(async (key: string, value: unknown) => {
+    mockCacheStore.set(key, value);
+  }),
+  delete: jest.fn().mockImplementation(async (key: string) => {
+    mockCacheStore.delete(key);
+  }),
+  flush: jest.fn().mockImplementation(async () => {
+    mockCacheStore.clear();
+  }),
 };
 
 jest.mock("../../services/cache", () => ({
   buildCacheKey: jest.fn((data: Record<string, unknown>) => {
     const { createHash } = require("crypto");
     const canonical = JSON.stringify(
-      Object.keys(data).sort().reduce<Record<string, unknown>>((acc, k) => {
-        acc[k] = data[k];
-        return acc;
-      }, {}),
+      Object.keys(data)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, k) => {
+          acc[k] = data[k];
+          return acc;
+        }, {}),
     );
     return createHash("sha256").update(canonical).digest("hex");
   }),

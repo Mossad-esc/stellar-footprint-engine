@@ -29,7 +29,7 @@ describe("bruteForceMiddleware", () => {
     res: Response,
     next: NextFunction,
   ) => Promise<void>;
-  let recordFailure: (ip: string) => void;
+  let recordFailure: (ip: string) => Promise<void>;
 
   beforeEach(() => {
     Object.assign(process.env, ENV_OVERRIDES);
@@ -53,11 +53,12 @@ describe("bruteForceMiddleware", () => {
   it("requests above delay threshold are delayed then calls next", async () => {
     jest.useFakeTimers();
     const ip = "10.0.0.2";
-    recordFailure(ip);
-    recordFailure(ip); // count = 2 >= DELAY_THRESHOLD
+    await recordFailure(ip);
+    await recordFailure(ip); // count = 2 >= DELAY_THRESHOLD
 
     const next = jest.fn();
     const promise = bruteForceMiddleware(makeReq(ip), makeRes(), next);
+    await Promise.resolve();
     expect(next).not.toHaveBeenCalled(); // still awaiting the delay
     jest.runAllTimers();
     await promise;
@@ -66,7 +67,7 @@ describe("bruteForceMiddleware", () => {
 
   it("requests above block threshold return 429", async () => {
     const ip = "10.0.0.3";
-    for (let i = 0; i < 4; i++) recordFailure(ip); // count = 4 >= BLOCK_THRESHOLD
+    for (let i = 0; i < 4; i++) await recordFailure(ip); // count = 4 >= BLOCK_THRESHOLD
 
     const res = makeRes();
     const next = jest.fn();

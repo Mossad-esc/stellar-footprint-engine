@@ -65,6 +65,7 @@ describe("httpCacheMiddleware (#341)", () => {
     const etag = `"${crypto.createHash("sha256").update(payload).digest("hex")}"`;
 
     const { req, res } = makeReqRes(etag);
+    const originalJsonMock = res.json;
     const next: NextFunction = jest.fn();
 
     httpCacheMiddleware(req, res, next);
@@ -73,7 +74,7 @@ describe("httpCacheMiddleware (#341)", () => {
     expect(res.status).toHaveBeenCalledWith(304);
     expect(res.end).toHaveBeenCalled();
     // json should NOT have been called with the body (we short-circuit)
-    expect(res.json).not.toHaveBeenCalledWith(body);
+    expect(originalJsonMock).not.toHaveBeenCalled();
   });
 
   it("does not set Cache-Control on non-200 responses", () => {

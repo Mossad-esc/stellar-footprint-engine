@@ -51,7 +51,10 @@ export function errorHandler(
     res.status(503).json({
       success: false,
       error: t.CIRCUIT_OPEN,
-      ...(res.locals.requestId ? { requestId: res.locals.requestId as string } : {}),
+      code: ErrorCode.CIRCUIT_OPEN,
+      ...(res.locals.requestId
+        ? { requestId: res.locals.requestId as string }
+        : {}),
     } satisfies ResponseEnvelope & { requestId?: string });
     return;
   }
@@ -60,7 +63,8 @@ export function errorHandler(
     isAppError(err) && typeof err.statusCode === "number"
       ? err.statusCode
       : 500;
-  const rawMessage = isAppError(err) ? err.message : "Internal server error";
+  const rawMessage =
+    err instanceof Error && err.message ? err.message : "Internal server error";
 
   const key = enValueToKey[rawMessage];
   const message = key ? (t[key] as string) : rawMessage;
@@ -72,7 +76,10 @@ export function errorHandler(
   const response: ResponseEnvelope & { requestId?: string } = {
     success: false,
     error: message,
-    ...(res.locals.requestId ? { requestId: res.locals.requestId as string } : {}),
+    code,
+    ...(res.locals.requestId
+      ? { requestId: res.locals.requestId as string }
+      : {}),
   };
 
   res.status(statusCode).json(response);

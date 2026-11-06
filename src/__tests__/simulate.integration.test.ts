@@ -80,6 +80,7 @@ describe("POST /api/v1/simulate", () => {
         VALID_XDR,
         "testnet",
         expect.anything(),
+        undefined,
       );
     });
 
@@ -95,6 +96,7 @@ describe("POST /api/v1/simulate", () => {
         VALID_XDR,
         "mainnet",
         expect.anything(),
+        undefined,
       );
     });
   });
@@ -120,7 +122,7 @@ describe("POST /api/v1/simulate", () => {
     it("returns 400 for invalid network value", async () => {
       const res = await request(app)
         .post("/api/v1/simulate")
-        .send({ xdr: VALID_XDR, network: "futurenet" });
+        .send({ xdr: VALID_XDR, network: "invalid-net" });
 
       expect(res.status).toBe(400);
       expect(mockSimulate).not.toHaveBeenCalled();

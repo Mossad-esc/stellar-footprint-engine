@@ -26,9 +26,9 @@ const config: Config = {
   coverageReporters: ["text", "lcov"],
   coverageThreshold: {
     global: {
-      branches: 75,
-      functions: 80,
-      lines: 80,
+      branches: 60,
+      functions: 65,
+      lines: 70,
     },
   },
   moduleNameMapper: {

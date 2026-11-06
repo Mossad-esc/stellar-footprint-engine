@@ -74,7 +74,9 @@ describe("hmacVerify (#342)", () => {
     hmacVerify(req, res, next);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.stringContaining("not configured") }),
+      expect.objectContaining({
+        error: expect.stringContaining("not configured"),
+      }),
     );
     expect(next).not.toHaveBeenCalled();
   });

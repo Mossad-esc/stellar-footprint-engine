@@ -48,16 +48,28 @@ export function footprintDiff(
   const afterReadWriteSet = new Set(afterReadWrite);
 
   // Added entries (in after but not in before)
-  const addedReadOnly = afterReadOnly.filter((xdr) => !beforeReadOnlySet.has(xdr));
-  const addedReadWrite = afterReadWrite.filter((xdr) => !beforeReadWriteSet.has(xdr));
+  const addedReadOnly = afterReadOnly.filter(
+    (xdr) => !beforeReadOnlySet.has(xdr),
+  );
+  const addedReadWrite = afterReadWrite.filter(
+    (xdr) => !beforeReadWriteSet.has(xdr),
+  );
 
   // Removed entries (in before but not in after)
-  const removedReadOnly = beforeReadOnly.filter((xdr) => !afterReadOnlySet.has(xdr));
-  const removedReadWrite = beforeReadWrite.filter((xdr) => !afterReadWriteSet.has(xdr));
+  const removedReadOnly = beforeReadOnly.filter(
+    (xdr) => !afterReadOnlySet.has(xdr),
+  );
+  const removedReadWrite = beforeReadWrite.filter(
+    (xdr) => !afterReadWriteSet.has(xdr),
+  );
 
   // Unchanged entries (present in both)
-  const unchangedReadOnly = beforeReadOnly.filter((xdr) => afterReadOnlySet.has(xdr));
-  const unchangedReadWrite = beforeReadWrite.filter((xdr) => afterReadWriteSet.has(xdr));
+  const unchangedReadOnly = beforeReadOnly.filter((xdr) =>
+    afterReadOnlySet.has(xdr),
+  );
+  const unchangedReadWrite = beforeReadWrite.filter((xdr) =>
+    afterReadWriteSet.has(xdr),
+  );
 
   return {
     added: { readOnly: addedReadOnly, readWrite: addedReadWrite },

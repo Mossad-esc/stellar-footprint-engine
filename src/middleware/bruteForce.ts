@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 
 import { CounterStore, getCounterStore } from "./counterStore";
+import { ErrorCode } from "../constants";
 
 const DELAY_THRESHOLD = parseInt(
   process.env.BRUTE_FORCE_DELAY_THRESHOLD || "10",
@@ -32,8 +33,6 @@ export async function recordFailure(ip: string): Promise<void> {
 
   await store.set(ip, record, TTL_MS);
 }
-
-import { ErrorCode } from "../constants";
 
 export async function bruteForceMiddleware(
   req: Request,

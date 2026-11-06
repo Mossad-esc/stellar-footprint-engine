@@ -1,8 +1,3 @@
-import request from "supertest";
-
-import app from "../index";
-import { SOROBAN_INVOKE_XDR } from "../tests/fixtures/xdr";
-
 jest.mock("@services/simulator", () => ({
   simulateTransaction: jest.fn(),
   simulationCache: { get: jest.fn(), set: jest.fn() },
@@ -52,6 +47,10 @@ import { decodeXdr } from "@services/decoder";
 import { estimateFee } from "@services/feeEstimator";
 import { getNetworkStatus } from "@services/networkStatus";
 import { simulateTransaction } from "@services/simulator";
+import request from "supertest";
+
+import app from "../index";
+import { SOROBAN_INVOKE_XDR } from "../tests/fixtures/xdr";
 
 const mockSimulateTransaction = simulateTransaction as jest.MockedFunction<
   typeof simulateTransaction
@@ -137,7 +136,7 @@ describe("endpoint response shape snapshots", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchInlineSnapshot(`
-      Object {
+      {
         "status": "ok",
         "timestamp": "2026-01-02T03:04:05.000Z",
         "uptime": 123.456,
@@ -153,35 +152,35 @@ describe("endpoint response shape snapshots", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchInlineSnapshot(`
-      Object {
+      {
         "cacheHit": false,
         "contractType": "token",
-        "contracts": Array [
+        "contracts": [
           "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ],
-        "cost": Object {
+        "cost": {
           "cpuInsns": "123456",
           "memBytes": "4096",
         },
-        "footprint": Object {
-          "readOnly": Array [
+        "footprint": {
+          "readOnly": [
             "AAAABgAAAAAAA",
           ],
-          "readWrite": Array [
+          "readWrite": [
             "AAAABgAAAAAAB",
           ],
         },
         "optimized": true,
-        "rawFootprint": Object {
-          "readOnly": Array [
+        "rawFootprint": {
+          "readOnly": [
             "AAAABgAAAAAAA",
           ],
-          "readWrite": Array [
+          "readWrite": [
             "AAAABgAAAAAAB",
           ],
         },
         "success": true,
-        "ttl": Object {
+        "ttl": {
           "liveUntilLedgerSeq": 12345,
         },
       }
@@ -189,7 +188,9 @@ describe("endpoint response shape snapshots", () => {
   });
 
   it("captures failed /simulate response shape", async () => {
-    mockSimulateTransaction.mockResolvedValueOnce(MOCK_SIMULATION_ERROR as never);
+    mockSimulateTransaction.mockResolvedValueOnce(
+      MOCK_SIMULATION_ERROR as never,
+    );
 
     const response = await request(app)
       .post("/api/v1/simulate")
@@ -197,7 +198,8 @@ describe("endpoint response shape snapshots", () => {
 
     expect(response.status).toBe(422);
     expect(response.body).toMatchInlineSnapshot(`
-      Object {
+      {
+        "code": "UNPROCESSABLE_ENTITY",
         "error": "contract panic: assertion failed",
         "success": false,
       }
@@ -209,8 +211,8 @@ describe("endpoint response shape snapshots", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchInlineSnapshot(`
-      Object {
-        "data": Object {
+      {
+        "data": {
           "baseFee": "100",
           "ledger": 123456,
           "networkPassphrase": "Test SDF Network ; September 2015",
@@ -228,10 +230,10 @@ describe("endpoint response shape snapshots", () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchInlineSnapshot(`
-      Object {
-        "decoded": Object {
-          "operations": Array [
-            Object {
+      {
+        "decoded": {
+          "operations": [
+            {
               "function": "hello",
               "type": "invokeHostFunction",
             },
@@ -245,17 +247,15 @@ describe("endpoint response shape snapshots", () => {
   });
 
   it("captures /estimate-fee response shape", async () => {
-    const response = await request(app)
-      .post("/api/v1/estimate-fee")
-      .send({
-        cpuInsns: "100000",
-        memBytes: "2048",
-        network: "testnet",
-      });
+    const response = await request(app).post("/api/v1/estimate-fee").send({
+      cpuInsns: "100000",
+      memBytes: "2048",
+      network: "testnet",
+    });
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchInlineSnapshot(`
-      Object {
+      {
         "baseFee": "100",
         "feeInXLM": "0.0000350",
         "resourceFee": "250",

@@ -29,7 +29,6 @@ import {
   getErrorCodeByMessage,
 } from "../constants";
 import { ResponseEnvelope } from "../types";
-import { validateXdrInput } from "../utils/validateXdrInput";
 
 export function supportedNetworks(_req: Request, res: Response): void {
   const networks: string[] = [];
@@ -120,10 +119,11 @@ export async function simulate(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { xdr, network, webhookUrl } = req.body as {
+  const { xdr, network, webhookUrl, ledgerSequence } = req.body as {
     xdr?: string;
     network?: Network;
     webhookUrl?: string;
+    ledgerSequence?: number;
   };
 
   const xdrCheck = validateXdrInput(xdr);
@@ -421,11 +421,12 @@ export async function footprintDiffController(
   }
 
   try {
+    const diff = footprintDiff(before, after);
     const response: ResponseEnvelope = {
-      success: false,
-      data: { message: "Not fully implemented" },
+      success: true,
+      data: diff,
     };
-    res.status(HTTP_STATUS.NOT_IMPLEMENTED).json(response);
+    res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;

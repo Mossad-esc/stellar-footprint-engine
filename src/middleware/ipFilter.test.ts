@@ -58,7 +58,11 @@ describe("ipFilterMiddleware", () => {
       ).toHaveBeenCalledWith(403);
       expect(
         (res as unknown as Record<string, jest.Mock>).json,
-      ).toHaveBeenCalledWith({ error: "Forbidden" });
+      ).toHaveBeenCalledWith({
+        success: false,
+        error: "Forbidden",
+        code: "FORBIDDEN",
+      });
       expect(next).not.toHaveBeenCalled();
     });
 
