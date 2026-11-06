@@ -1,7 +1,15 @@
 {
-  "name": "stellar-footprint-service",
+  "name": "stellar-footprint-engine",
   "version": "1.0.0",
   "description": "Stellar transaction footprint simulation service",
+  "homepage": "https://github.com/Mossad-esc/stellar-footprint-engine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mossad-esc/stellar-footprint-engine.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Mossad-esc/stellar-footprint-engine/issues"
+  },
   "main": "dist/index.js",
   "engines": {
     "node": ">=18.0.0"

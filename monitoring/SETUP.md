@@ -14,8 +14,8 @@ Complete guide to setting up Grafana dashboard monitoring for the Stellar Footpr
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/stellar-footprint-service.git
-cd stellar-footprint-service
+git clone https://github.com/Mossad-esc/stellar-footprint-engine.git
+cd stellar-footprint-engine
 
 # Checkout the monitoring branch
 git checkout feature/grafana-dashboard

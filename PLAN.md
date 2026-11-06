@@ -128,7 +128,7 @@ Handle errors, extract auth, fee-bump transactions, restoration workflows, footp
 
 ## 💬 Communication
 
-[GitHub Issues](https://github.com/yourusername/stellar-footprint-service/issues) | [Discussions](https://github.com/yourusername/stellar-footprint-service/discussions) | [Stellar Discord](https://discord.gg/stellar)
+[GitHub Issues](https://github.com/Mossad-esc/stellar-footprint-engine/issues) | [Discussions](https://github.com/Mossad-esc/stellar-footprint-engine/discussions) | [Stellar Discord](https://discord.gg/stellar)
 
 ---
 

@@ -1,8 +1,8 @@
 # 🚀 Stellar Footprint Service
 
-[![CI](https://github.com/josunday002/Stellar-Footprint-Service/actions/workflows/ci.yml/badge.svg)](https://github.com/josunday002/Stellar-Footprint-Service/actions/workflows/ci.yml)
-[![Docker Publish](https://github.com/Dafuriousis/Stellar-Footprint-Service/actions/workflows/release.yml/badge.svg)](https://github.com/Dafuriousis/Stellar-Footprint-Service/actions/workflows/release.yml)
-[![codecov](https://codecov.io/gh/josunday002/Stellar-Footprint-Service/branch/main/graph/badge.svg)](https://codecov.io/gh/josunday002/Stellar-Footprint-Service)
+[![CI](https://github.com/Mossad-esc/stellar-footprint-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Mossad-esc/stellar-footprint-engine/actions/workflows/ci.yml)
+[![Docker Publish](https://github.com/Mossad-esc/stellar-footprint-engine/actions/workflows/release.yml/badge.svg)](https://github.com/Mossad-esc/stellar-footprint-engine/actions/workflows/release.yml)
+[![codecov](https://codecov.io/gh/Mossad-esc/stellar-footprint-engine/branch/main/graph/badge.svg)](https://codecov.io/gh/Mossad-esc/stellar-footprint-engine)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
 
@@ -88,8 +88,8 @@ For a detailed explanation of each component and design decisions, see [docs/arc
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/stellar-footprint-service.git
-cd stellar-footprint-service
+git clone https://github.com/Mossad-esc/stellar-footprint-engine.git
+cd stellar-footprint-engine
 
 # Install dependencies
 npm install
@@ -1018,8 +1018,8 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## 📞 Support
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/stellar-footprint-service/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/stellar-footprint-service/discussions)
+- **Issues:** [GitHub Issues](https://github.com/Mossad-esc/stellar-footprint-engine/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/Mossad-esc/stellar-footprint-engine/discussions)
 - **Stellar Discord:** [stellar.org/community](https://stellar.org/community)
 
 ---

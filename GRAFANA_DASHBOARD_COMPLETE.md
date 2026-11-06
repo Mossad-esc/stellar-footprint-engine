@@ -113,7 +113,7 @@ git config --global user.email "your.email@example.com"
 git config --global user.name "Your Name"
 
 # Option B: Repository-specific
-cd Stellar-Footprint-Service
+cd stellar-footprint-engine
 git config user.email "your.email@example.com"
 git config user.name "Your Name"
 ```
@@ -121,7 +121,7 @@ git config user.name "Your Name"
 ### 2. Commit All Changes
 
 ```bash
-cd Stellar-Footprint-Service
+cd stellar-footprint-engine
 
 # Verify you're on the correct branch
 git branch

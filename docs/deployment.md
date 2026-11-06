@@ -51,7 +51,7 @@ Railway auto-detects Node.js projects and builds from your `Dockerfile`.
 
 2. Select **Deploy from GitHub repo** and authorize Railway to access your repository.
 
-3. Choose the `stellar-footprint-service` repository. Railway will detect the `Dockerfile` automatically.
+3. Choose the `stellar-footprint-engine` repository. Railway will detect the `Dockerfile` automatically.
 
 4. Once the project is created, click the service card, then go to **Variables**.
 
@@ -103,7 +103,7 @@ Render supports Docker-based deployments with zero-downtime deploys.
 
 1. Log in to [render.com](https://render.com) and click **New → Web Service**.
 
-2. Connect your GitHub/GitLab account and select the `stellar-footprint-service` repository.
+2. Connect your GitHub/GitLab account and select the `stellar-footprint-engine` repository.
 
 3. Configure the service:
    - **Name:** `stellar-footprint-service`
@@ -266,7 +266,7 @@ npm install -g pnpm pm2
 #### 3. Clone the repository
 
 ```bash
-git clone https://github.com/Dafuriousis/Stellar-Footprint-Service.git /opt/stellar-footprint-service
+git clone https://github.com/Mossad-esc/stellar-footprint-engine.git /opt/stellar-footprint-service
 cd /opt/stellar-footprint-service
 ```
 

@@ -18,7 +18,7 @@ git config --global user.name "Your Name"
 ## 💾 Step 2: Commit Changes
 
 ```bash
-cd Stellar-Footprint-Service
+cd stellar-footprint-engine
 
 # Stage all files
 git add .

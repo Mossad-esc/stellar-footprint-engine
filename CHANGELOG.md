@@ -53,5 +53,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable IP allowlist to restrict access to trusted clients
 - Circuit breaker prevents cascading failures from RPC outages
 
-[Unreleased]: https://github.com/Dafuriousis/Stellar-Footprint-Service/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/Dafuriousis/Stellar-Footprint-Service/releases/tag/v1.0.0
+[Unreleased]: https://github.com/Mossad-esc/stellar-footprint-engine/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Mossad-esc/stellar-footprint-engine/releases/tag/v1.0.0

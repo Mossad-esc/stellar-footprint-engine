@@ -16,17 +16,17 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ## Fork and Clone
 
-1. **Fork** the repository by clicking the **Fork** button on [GitHub](https://github.com/Dafuriousis/Stellar-Footprint-Service).
+1. **Fork** the repository by clicking the **Fork** button on [GitHub](https://github.com/Mossad-esc/stellar-footprint-engine).
 
 2. **Clone** your fork locally:
    ```bash
-   git clone https://github.com/<your-username>/Stellar-Footprint-Service.git
-   cd Stellar-Footprint-Service
+   git clone https://github.com/<your-username>/stellar-footprint-engine.git
+   cd stellar-footprint-engine
    ```
 
 3. **Add the upstream remote** so you can pull in future changes:
    ```bash
-   git remote add upstream https://github.com/Dafuriousis/Stellar-Footprint-Service.git
+   git remote add upstream https://github.com/Mossad-esc/stellar-footprint-engine.git
    ```
 
 4. **Create a branch** for your work:

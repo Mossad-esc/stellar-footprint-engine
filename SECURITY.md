@@ -7,7 +7,7 @@
 Report vulnerabilities privately using one of these channels:
 
 - **Email:** [jeremiahniffypeter@gmail.com](mailto:jeremiahniffypeter@gmail.com)
-- **GitHub Security Advisories:** [Report a vulnerability](https://github.com/Dafuriousis/Stellar-Footprint-Service/security/advisories/new)
+- **GitHub Security Advisories:** [Report a vulnerability](https://github.com/Mossad-esc/stellar-footprint-engine/security/advisories/new)
 
 Include as much detail as possible:
 
