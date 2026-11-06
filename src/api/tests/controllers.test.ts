@@ -585,3 +585,77 @@ describe("POST /api/v1/footprint/diff", () => {
     expect(res.body.data.unchanged.readWrite).toContain(xdr1);
   });
 });
+
+// ── POST /validate ──────────────────────────────────────────────────────────
+
+describe("POST /api/v1/validate", () => {
+  it("returns 400 when xdr is missing", async () => {
+    const res = await request(app).post("/api/v1/validate").send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      success: false,
+      error: "Missing required field: xdr",
+      code: "MISSING_XDR",
+    });
+  });
+
+  it("returns 400 when network is invalid", async () => {
+    const res = await request(app)
+      .post("/api/v1/validate")
+      .send({ xdr: VALID_XDR, network: "devnet" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: "INVALID_NETWORK",
+    });
+  });
+
+  it("validates a well-formed Soroban transaction XDR locally without RPC", async () => {
+    const res = await request(app)
+      .post("/api/v1/validate")
+      .send({ xdr: VALID_XDR, network: "testnet" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      success: true,
+      data: {
+        valid: true,
+        errors: [],
+        warnings: [],
+        network: "testnet",
+      },
+    });
+  });
+
+  it("returns structured validation errors for malformed XDR", async () => {
+    const res = await request(app)
+      .post("/api/v1/validate")
+      .send({ xdr: "AAAA", network: "futurenet" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.valid).toBe(false);
+    expect(res.body.data.network).toBe("futurenet");
+    expect(res.body.data.errors).toContain(
+      "Failed to parse XDR as a transaction",
+    );
+  });
+});
+
+// ── POST /restore validation ────────────────────────────────────────────────
+
+describe("POST /api/v1/restore validation", () => {
+  it("returns 400 when network is invalid instead of silently falling back", async () => {
+    const res = await request(app)
+      .post("/api/v1/restore")
+      .send({ xdr: VALID_XDR, network: "invalid-net" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: "INVALID_NETWORK",
+    });
+  });
+});

@@ -1,6 +1,12 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import { Network, getNetworkConfig } from "../config/stellar";
+import { Network, isValidNetwork } from "../config/stellar";
+
+const PASSPHRASES: Record<Network, string> = {
+  mainnet: StellarSdk.Networks.PUBLIC,
+  testnet: StellarSdk.Networks.TESTNET,
+  futurenet: StellarSdk.Networks.FUTURENET,
+};
 
 export interface XdrValidationResult {
   valid: boolean;
@@ -11,7 +17,7 @@ export interface XdrValidationResult {
 /**
  * Validate XDR transaction for Soroban invokeHostFunction operation and network match.
  * @param xdr - Base64 encoded XDR transaction
- * @param network - Stellar network (mainnet or testnet)
+ * @param network - Stellar network (mainnet, testnet, or futurenet)
  * @returns Validation result with valid flag, errors, and warnings
  */
 export function validateXdr(
@@ -35,21 +41,18 @@ export function validateXdr(
     return { valid: false, errors, warnings };
   }
 
-  // 3. Get network passphrase
-  let networkPassphrase: string;
-  try {
-    const networkConfig = getNetworkConfig(network);
-    networkPassphrase = networkConfig.networkPassphrase;
-  } catch (err) {
+  // 3. Resolve network passphrase without requiring live RPC credentials
+  if (!isValidNetwork(network)) {
     errors.push(`Network configuration not found for: ${network}`);
     return { valid: false, errors, warnings };
   }
+  const networkPassphrase = PASSPHRASES[network];
 
   // 4. Parse XDR as a transaction
   let tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction;
   try {
     tx = StellarSdk.TransactionBuilder.fromXDR(xdr, networkPassphrase);
-  } catch (err) {
+  } catch {
     errors.push("Failed to parse XDR as a transaction");
     return { valid: false, errors, warnings };
   }

@@ -10,6 +10,7 @@ import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
 import { simulateTransaction } from "@services/simulator";
+import { validateXdr } from "@services/validator";
 import { createJob, deliverWebhook } from "@services/webhook";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { AppError } from "@utils/AppError";
@@ -435,16 +436,44 @@ export async function footprintDiffController(
 }
 
 export async function validate(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
+  const { xdr, network } = req.body as {
+    xdr?: string;
+    network?: string;
+  };
+
+  if (!xdr || typeof xdr !== "string" || xdr.trim() === "") {
+    return next(
+      new AppError(ERROR_MESSAGES.MISSING_XDR, HTTP_STATUS.BAD_REQUEST),
+    );
+  }
+
+  if (
+    network &&
+    network !== NETWORKS.MAINNET &&
+    network !== NETWORKS.TESTNET &&
+    network !== NETWORKS.FUTURENET
+  ) {
+    return next(
+      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
+    );
+  }
+
+  const net: Network = (network as Network) || DEFAULT_NETWORK;
+
   try {
+    const result = validateXdr(xdr, net);
     const response: ResponseEnvelope = {
-      success: false,
-      data: { message: "Not implemented" },
+      success: true,
+      data: {
+        ...result,
+        network: net,
+      },
     };
-    res.status(HTTP_STATUS.NOT_IMPLEMENTED).json(response);
+    res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
@@ -457,15 +486,25 @@ export async function restore(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { xdr, network } = req.body as { xdr?: string; network?: Network };
+  const { xdr, network } = req.body as { xdr?: string; network?: string };
 
   const xdrCheck = validateXdrInput(xdr);
   if (!xdrCheck.valid) {
     return next(new AppError(xdrCheck.error!, HTTP_STATUS.BAD_REQUEST));
   }
 
-  const net: Network =
-    network === NETWORKS.MAINNET ? NETWORKS.MAINNET : DEFAULT_NETWORK;
+  if (
+    network &&
+    network !== NETWORKS.MAINNET &&
+    network !== NETWORKS.TESTNET &&
+    network !== NETWORKS.FUTURENET
+  ) {
+    return next(
+      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
+    );
+  }
+
+  const net: Network = (network as Network) || DEFAULT_NETWORK;
 
   try {
     const result = await buildRestoreTransaction(xdr!, net);
