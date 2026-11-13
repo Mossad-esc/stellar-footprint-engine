@@ -39,7 +39,7 @@
     "load-test": "node scripts/load-test.js"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^15.1.0",
+    "@stellar/stellar-sdk": "^17.4.0",
     "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
