@@ -422,4 +422,45 @@ describe("estimateFeeDetailed", () => {
     expect(result.baseFee).toBe("100");
     expect(result.inclusionFee).toBe("100");
   });
+
+  // ── Footprint byte size fee inclusion ─────────────────────────────────────
+
+  it("includes serialized footprint byte size in estimateFee and estimateFeeDetailed", async () => {
+    const baseline = await estimateFee("10000", "1000", "testnet");
+    const withNumericFootprint = await estimateFee(
+      "10000",
+      "1000",
+      "testnet",
+      120,
+    );
+    // 120 bytes * (100 historical + 100 metadata) = 24,000 stroops
+    expect(
+      BigInt(withNumericFootprint.resourceFee) - BigInt(baseline.resourceFee),
+    ).toBe(24000n);
+
+    const footprintInput = {
+      readOnlyBytes: 40,
+      readWriteBytes: 48,
+      estimatedSizeBytes: 96,
+    };
+    const simpleWithStruct = await estimateFee(
+      "10000",
+      "1000",
+      "testnet",
+      footprintInput,
+    );
+    const detailedWithStruct = await estimateFeeDetailed(
+      "10000",
+      "1000",
+      "testnet",
+      footprintInput,
+    );
+
+    // readOnly: 40 * 250 = 10,000; readWrite: 48 * 1000 = 48,000; serialized: 96 * 200 = 19,200 -> 77,200
+    expect(detailedWithStruct.breakdown.footprintFee).toBe("77200");
+    expect(detailedWithStruct.totalStroops).toBe(simpleWithStruct.totalFee);
+    expect(
+      BigInt(simpleWithStruct.resourceFee) - BigInt(baseline.resourceFee),
+    ).toBe(77200n);
+  });
 });

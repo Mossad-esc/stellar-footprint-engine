@@ -16,6 +16,12 @@ const DEFAULT_METADATA_FEE_RATE = 100n; // stroops per byte of metadata
 // Typical overhead bytes for a Soroban transaction (approximate)
 const TYPICAL_TX_OVERHEAD_BYTES = 300n;
 
+export interface FootprintFeeInput {
+  readOnlyBytes?: number | bigint;
+  readWriteBytes?: number | bigint;
+  estimatedSizeBytes?: number | bigint;
+}
+
 export interface FeeEstimate {
   baseFee: string;
   resourceFee: string;
@@ -34,7 +40,38 @@ export interface DetailedFeeBreakdown {
     memoryFee: string;
     readFee: string;
     overheadFee: string;
+    footprintFee?: string;
   };
+}
+
+function calculateFootprintFee(
+  footprintBytes?: number | bigint | FootprintFeeInput,
+): bigint {
+  if (footprintBytes === undefined) {
+    return 0n;
+  }
+
+  const envelopeRate = DEFAULT_HISTORICAL_FEE_RATE + DEFAULT_METADATA_FEE_RATE;
+  if (
+    typeof footprintBytes === "number" ||
+    typeof footprintBytes === "bigint"
+  ) {
+    const size = BigInt(footprintBytes);
+    return size > 0n ? size * envelopeRate : 0n;
+  }
+
+  const readOnly = BigInt(footprintBytes.readOnlyBytes ?? 0);
+  const readWrite = BigInt(footprintBytes.readWriteBytes ?? 0);
+  const serialized = BigInt(
+    footprintBytes.estimatedSizeBytes ?? readOnly + readWrite,
+  );
+
+  const keyBandwidthFee =
+    (readOnly > 0n ? readOnly * DEFAULT_READ_FEE_PER_BYTE : 0n) +
+    (readWrite > 0n ? readWrite * DEFAULT_WRITE_FEE_PER_BYTE : 0n);
+  const txSizeFee = serialized > 0n ? serialized * envelopeRate : 0n;
+
+  return keyBandwidthFee + txSizeFee;
 }
 
 /**
@@ -55,7 +92,11 @@ async function fetchRecommendedInclusionFee(network: Network): Promise<bigint> {
 /**
  * Estimate the Soroban resource fee from CPU instructions and memory bytes.
  */
-function estimateResourceFee(cpuInsns: bigint, memBytes: bigint): bigint {
+function estimateResourceFee(
+  cpuInsns: bigint,
+  memBytes: bigint,
+  footprintBytes?: number | bigint | FootprintFeeInput,
+): bigint {
   const cpuFee =
     ((cpuInsns + INSTRUCTION_INCREMENT - 1n) / INSTRUCTION_INCREMENT) *
     DEFAULT_FEE_RATE_PER_INSTRUCTION_INCREMENT;
@@ -67,8 +108,9 @@ function estimateResourceFee(cpuInsns: bigint, memBytes: bigint): bigint {
     (DEFAULT_HISTORICAL_FEE_RATE + DEFAULT_METADATA_FEE_RATE);
 
   const readFee = memBytes * DEFAULT_READ_FEE_PER_BYTE;
+  const footprintFee = calculateFootprintFee(footprintBytes);
 
-  return cpuFee + memFee + readFee + overhead;
+  return cpuFee + memFee + readFee + overhead + footprintFee;
 }
 
 /**
@@ -77,12 +119,14 @@ function estimateResourceFee(cpuInsns: bigint, memBytes: bigint): bigint {
 function estimateResourceFeeDetailed(
   cpuInsns: bigint,
   memBytes: bigint,
+  footprintBytes?: number | bigint | FootprintFeeInput,
 ): {
   total: bigint;
   cpuFee: bigint;
   memoryFee: bigint;
   readFee: bigint;
   overheadFee: bigint;
+  footprintFee: bigint;
 } {
   const cpuFee =
     ((cpuInsns + INSTRUCTION_INCREMENT - 1n) / INSTRUCTION_INCREMENT) *
@@ -95,10 +139,11 @@ function estimateResourceFeeDetailed(
     (DEFAULT_HISTORICAL_FEE_RATE + DEFAULT_METADATA_FEE_RATE);
 
   const readFee = memBytes * DEFAULT_READ_FEE_PER_BYTE;
+  const footprintFee = calculateFootprintFee(footprintBytes);
 
-  const total = cpuFee + memoryFee + readFee + overheadFee;
+  const total = cpuFee + memoryFee + readFee + overheadFee + footprintFee;
 
-  return { total, cpuFee, memoryFee, readFee, overheadFee };
+  return { total, cpuFee, memoryFee, readFee, overheadFee, footprintFee };
 }
 
 /**
@@ -108,13 +153,14 @@ export async function estimateFee(
   cpuInsns: string,
   memBytes: string,
   network: Network = "testnet",
+  footprintBytes?: number | bigint | FootprintFeeInput,
 ): Promise<FeeEstimate> {
   const cpu = BigInt(cpuInsns);
   const mem = BigInt(memBytes);
 
   const [baseFee, resourceFee] = await Promise.all([
     fetchRecommendedInclusionFee(network),
-    Promise.resolve(estimateResourceFee(cpu, mem)),
+    Promise.resolve(estimateResourceFee(cpu, mem, footprintBytes)),
   ]);
 
   const totalFee = baseFee + resourceFee;
@@ -137,13 +183,14 @@ export async function estimateFeeDetailed(
   cpuInsns: string,
   memBytes: string,
   network: Network = "testnet",
+  footprintBytes?: number | bigint | FootprintFeeInput,
 ): Promise<DetailedFeeBreakdown> {
   const cpu = BigInt(cpuInsns);
   const mem = BigInt(memBytes);
 
   const [inclusionFee, resourceBreakdown] = await Promise.all([
     fetchRecommendedInclusionFee(network),
-    Promise.resolve(estimateResourceFeeDetailed(cpu, mem)),
+    Promise.resolve(estimateResourceFeeDetailed(cpu, mem, footprintBytes)),
   ]);
 
   const baseFee = inclusionFee; // Base fee is the inclusion fee
@@ -155,17 +202,23 @@ export async function estimateFeeDetailed(
   const xlmFrac = totalStroops % STROOPS_PER_XLM;
   const totalXlm = `${xlmWhole}.${xlmFrac.toString().padStart(7, "0")}`;
 
+  const breakdown: DetailedFeeBreakdown["breakdown"] = {
+    cpuFee: resourceBreakdown.cpuFee.toString(),
+    memoryFee: resourceBreakdown.memoryFee.toString(),
+    readFee: resourceBreakdown.readFee.toString(),
+    overheadFee: resourceBreakdown.overheadFee.toString(),
+  };
+
+  if (footprintBytes !== undefined) {
+    breakdown.footprintFee = resourceBreakdown.footprintFee.toString();
+  }
+
   return {
     baseFee: baseFee.toString(),
     resourceFee: resourceFee.toString(),
     inclusionFee: inclusionFee.toString(),
     totalStroops: totalStroops.toString(),
     totalXlm,
-    breakdown: {
-      cpuFee: resourceBreakdown.cpuFee.toString(),
-      memoryFee: resourceBreakdown.memoryFee.toString(),
-      readFee: resourceBreakdown.readFee.toString(),
-      overheadFee: resourceBreakdown.overheadFee.toString(),
-    },
+    breakdown,
   };
 }

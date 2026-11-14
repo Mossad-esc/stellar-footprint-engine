@@ -1,7 +1,10 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import * as stellarConfig from "../../config/stellar";
-import { extractFootprint } from "../footprintExtractor";
+import {
+  calculateSerializedFootprintSize,
+  extractFootprint,
+} from "../footprintExtractor";
 import * as footprintParser from "../footprintParser";
 
 jest.mock("../../config/stellar", () => ({
@@ -72,6 +75,20 @@ describe("extractFootprint", () => {
     expect(extracted.optimizationResult.readOnly).toHaveLength(1);
     expect(extracted.contracts).toEqual(["01".repeat(32)]);
     expect(extracted.contractType).toBe("sac");
+    expect(extracted.footprintStats).toEqual({
+      readOnlyCount: 2,
+      readWriteCount: 1,
+      totalEntries: 3,
+      readOnlyBytes: accountKey.toXDR().length + contractKey.toXDR().length,
+      readWriteBytes: contractKey.toXDR().length,
+      serializedFootprintBytes: sorobanData
+        .build()
+        .resources()
+        .footprint()
+        .toXDR().length,
+      estimatedSizeBytes: sorobanData.build().resources().footprint().toXDR()
+        .length,
+    });
     expect(detectSpy).toHaveBeenCalledWith("01".repeat(32), mockServer);
 
     detectSpy.mockRestore();
@@ -99,5 +116,58 @@ describe("extractFootprint", () => {
     expect(detectSpy).not.toHaveBeenCalled();
 
     detectSpy.mockRestore();
+  });
+
+  it("calculates exact XDR serialized byte sizes for empty, base64, and XDR LedgerFootprint inputs", () => {
+    const emptyFootprint = new StellarSdk.xdr.LedgerFootprint({
+      readOnly: [],
+      readWrite: [],
+    });
+    const emptyStats = calculateSerializedFootprintSize(emptyFootprint);
+    // Empty LedgerFootprint consists of two 4-byte XDR variable-array length headers = 8 bytes
+    expect(emptyStats).toEqual({
+      readOnlyCount: 0,
+      readWriteCount: 0,
+      totalEntries: 0,
+      readOnlyBytes: 0,
+      readWriteBytes: 0,
+      serializedFootprintBytes: 8,
+      estimatedSizeBytes: 8,
+    });
+
+    const accountKey = StellarSdk.xdr.LedgerKey.fromXDR(ACCOUNT_XDR, "base64");
+    const contractDataKey = StellarSdk.xdr.LedgerKey.fromXDR(
+      CONTRACT_DATA_XDR,
+      "base64",
+    );
+    const contractCodeKey = StellarSdk.xdr.LedgerKey.contractCode(
+      new StellarSdk.xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 9) }),
+    );
+
+    const expectedReadOnlyBytes =
+      accountKey.toXDR().length + contractCodeKey.toXDR().length;
+    const expectedReadWriteBytes = contractDataKey.toXDR().length;
+    const expectedStructBytes = new StellarSdk.xdr.LedgerFootprint({
+      readOnly: [accountKey, contractCodeKey],
+      readWrite: [contractDataKey],
+    }).toXDR().length;
+
+    const fromStrings = calculateSerializedFootprintSize({
+      readOnly: [ACCOUNT_XDR, contractCodeKey.toXDR("base64")],
+      readWrite: [CONTRACT_DATA_XDR],
+    });
+    expect(fromStrings).toEqual({
+      readOnlyCount: 2,
+      readWriteCount: 1,
+      totalEntries: 3,
+      readOnlyBytes: expectedReadOnlyBytes,
+      readWriteBytes: expectedReadWriteBytes,
+      serializedFootprintBytes: expectedStructBytes,
+      estimatedSizeBytes: expectedStructBytes,
+    });
+    // XDR array framing adds 4 bytes per array (8 bytes total) to individual key bytes
+    expect(fromStrings.estimatedSizeBytes).toBe(
+      expectedReadOnlyBytes + expectedReadWriteBytes + 8,
+    );
   });
 });

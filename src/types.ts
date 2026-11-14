@@ -12,6 +12,9 @@ export interface FootprintStats {
   readWriteCount: number;
   totalEntries: number;
   estimatedSizeBytes: number;
+  readOnlyBytes?: number;
+  readWriteBytes?: number;
+  serializedFootprintBytes?: number;
 }
 
 export interface AuthEntry {
