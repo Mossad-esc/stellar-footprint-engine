@@ -7,7 +7,10 @@ import { decodeXdr, type XdrType } from "@services/decoder";
 import { estimateFee, estimateFeeDetailed } from "@services/feeEstimator";
 import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { getNetworkStatus } from "@services/networkStatus";
-import { buildRestoreTransaction } from "@services/restorer";
+import {
+  buildRestoreTransaction,
+  type RestoreOptions,
+} from "@services/restorer";
 import { simulateTransaction } from "@services/simulator";
 import { validateXdr } from "@services/validator";
 import {
@@ -543,11 +546,22 @@ export async function restore(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { xdr, network } = req.body as { xdr?: string; network?: string };
+  const { xdr, network, wasmHash, contractId, wasmSizeBytes } = req.body as {
+    xdr?: string;
+    network?: string;
+    wasmHash?: string;
+    contractId?: string;
+    wasmSizeBytes?: number;
+  };
 
   const xdrCheck = validateXdrInput(xdr);
-  if (!xdrCheck.valid) {
-    return next(new AppError(xdrCheck.error!, HTTP_STATUS.BAD_REQUEST));
+  if (!xdrCheck.valid || typeof xdr !== "string") {
+    return next(
+      new AppError(
+        xdrCheck.error ?? ERROR_MESSAGES.MISSING_XDR,
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
   }
 
   if (
@@ -561,10 +575,58 @@ export async function restore(
     );
   }
 
+  if (
+    wasmHash !== undefined &&
+    (typeof wasmHash !== "string" || !/^[0-9a-fA-F]{64}$/.test(wasmHash))
+  ) {
+    return next(
+      new AppError(
+        "wasmHash must be a 64-character hex SHA-256 string",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+
+  if (
+    contractId !== undefined &&
+    (typeof contractId !== "string" ||
+      !StellarSdk.StrKey.isValidContract(contractId))
+  ) {
+    return next(
+      new AppError(
+        "contractId must be a valid Stellar contract address",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+
+  if (
+    wasmSizeBytes !== undefined &&
+    (typeof wasmSizeBytes !== "number" ||
+      !Number.isFinite(wasmSizeBytes) ||
+      wasmSizeBytes < 0)
+  ) {
+    return next(
+      new AppError(
+        "wasmSizeBytes must be a non-negative number",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+
   const net: Network = (network as Network) || DEFAULT_NETWORK;
+  const hasOptions =
+    wasmHash !== undefined ||
+    contractId !== undefined ||
+    wasmSizeBytes !== undefined;
+  const options: RestoreOptions | undefined = hasOptions
+    ? { wasmHash, contractId, wasmSizeBytes }
+    : undefined;
 
   try {
-    const result = await buildRestoreTransaction(xdr!, net);
+    const result = options
+      ? await buildRestoreTransaction(xdr, net, options)
+      : await buildRestoreTransaction(xdr, net);
     const response: ResponseEnvelope = { success: true, data: result };
     res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {

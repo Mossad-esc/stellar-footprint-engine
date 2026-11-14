@@ -99,4 +99,48 @@ describe("POST /api/v1/restore", () => {
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/RPC connection failed/);
   });
+
+  it("accepts optional wasmHash and wasmSizeBytes for expired contract code restoration", async () => {
+    const wasmHash = "ab".repeat(32);
+    mockBuildRestore.mockResolvedValue({
+      needsRestore: true,
+      restoreXdr: "AAAA...",
+      fee: "100",
+      estimatedRestoreFee: "385000",
+      wasmSizeBytes: 16384,
+      ledgerSequence: 500000,
+      restoredKeys: {
+        contractCode: [wasmHash],
+        contractInstance: [
+          "CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR",
+        ],
+      },
+    });
+
+    const res = await request(app).post(BASE).send({
+      xdr: VALID_XDR,
+      network: "testnet",
+      wasmHash,
+      wasmSizeBytes: 16384,
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockBuildRestore).toHaveBeenCalledWith(VALID_XDR, "testnet", {
+      wasmHash,
+      contractId: undefined,
+      wasmSizeBytes: 16384,
+    });
+    expect(res.body.data.wasmSizeBytes).toBe(16384);
+    expect(res.body.data.restoredKeys.contractCode).toContain(wasmHash);
+  });
+
+  it("returns 400 when wasmHash is not a 64-character hex string", async () => {
+    const res = await request(app)
+      .post(BASE)
+      .send({ xdr: VALID_XDR, wasmHash: "not-hex" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/wasmHash/i);
+    expect(mockBuildRestore).not.toHaveBeenCalled();
+  });
 });
