@@ -2,6 +2,12 @@ import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { clearRpcPool } from "../../config/stellar";
 import { simulateTransaction } from "../../services/simulator";
+import {
+  contractDataKey,
+  footprintTransaction,
+  sacFootprint,
+  TEST_ACCOUNT,
+} from "../fixtures/footprints";
 import { startMockRpcServer, MockRpcServerInstance } from "../mocks/rpcServer";
 
 /**
@@ -62,6 +68,65 @@ describe("simulateTransaction Integration Tests", () => {
   }
 
   describe("Success Scenarios", () => {
+    it.each([
+      StellarSdk.Asset.native(),
+      new StellarSdk.Asset("USDC", TEST_ACCOUNT),
+    ])(
+      "exposes %s SAC metadata from the simulated footprint",
+      async (asset) => {
+        const data = sacFootprint(asset);
+        mockRpc.configure({ transactionData: data.build().toXDR("base64") });
+        const tx = footprintTransaction(1, data);
+        const result = await simulateTransaction(tx.toXDR(), "testnet");
+        const assetInfo = asset.isNative()
+          ? { code: "XLM" }
+          : { code: "USDC", issuer: TEST_ACCOUNT };
+        expect(result.contractType).toBe("sac");
+        expect(result.isSAC).toBe(true);
+        expect(result.assetInfo).toEqual(assetInfo);
+        expect(result.footprintStats).toMatchObject({ isSAC: true, assetInfo });
+        mockRpc.configure({
+          transactionData: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        });
+      },
+    );
+
+    it.each([2, 5, 10])(
+      "matches the complete RPC footprint for %i mixed invocations",
+      async (count) => {
+        const keys = Array.from({ length: count }, (_, i) =>
+          contractDataKey(i + 1),
+        );
+        const shared = contractDataKey(42);
+        const data = new StellarSdk.SorobanDataBuilder()
+          .setReadOnly([...keys].reverse().concat([shared, keys[0]]))
+          .setReadWrite([shared, shared]);
+        mockRpc.configure({ transactionData: data.build().toXDR("base64") });
+        const tx = footprintTransaction(count, data, true);
+        const result = await simulateTransaction(tx.toXDR(), "testnet");
+        expect(result.success).toBe(true);
+        expect(result.rawFootprint).toEqual({
+          readOnly: data
+            .build()
+            .resources()
+            .footprint()
+            .readOnly()
+            .map((key) => key.toXDR("base64")),
+          readWrite: [shared.toXDR("base64"), shared.toXDR("base64")],
+        });
+        expect(result.footprint?.readOnly.map((key) => key.xdr)).toEqual(
+          keys.map((key) => key.toXDR("base64")),
+        );
+        expect(result.footprint?.readWrite.map((key) => key.xdr)).toEqual([
+          shared.toXDR("base64"),
+        ]);
+        expect(result.optimized).toBe(true);
+        mockRpc.configure({
+          transactionData: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        });
+      },
+    );
+
     it("should simulate transaction successfully with mock RPC", async () => {
       mockRpc.configure({ responseType: "success" });
       const xdr = createMinimalSorobanTxXdr();

@@ -143,7 +143,62 @@ To use the Stellar Footprint Service in your project:
 
 The service handles all footprint calculations automatically, letting you focus on building your contract logic rather than managing low-level ledger access details.
 
-## Learn More
+## Interpreting the simulation response
+
+`POST /simulate` preserves the RPC's base64 ledger keys in
+`rawFootprint.readOnly` and `rawFootprint.readWrite`. The parsed `footprint` arrays
+contain entry objects with `xdr` and `type`. Their keys are deduplicated and sorted
+by canonical XDR bytes, and a key requested for both read and write appears only
+in `footprint.readWrite`.
+
+Soroban resources belong to the whole transaction, including all its operations.
+`extractEnvelopeFootprint` reads this shared footprint from v1 and fee-bump
+envelopes, ignoring classic operations. `extractFootprint` also accepts an array
+of simulation responses to merge their footprints. The service processes the
+complete footprint returned by RPC; supported operation combinations still depend
+on the network's protocol rules.
+
+`footprint.breakdown` and `footprintStats.breakdown` expose four storage categories:
+
+| Category           | Ledger keys                                                   |
+| ------------------ | ------------------------------------------------------------- |
+| `contractCode`     | WASM executable code                                          |
+| `contractInstance` | The special contract instance key, including instance storage |
+| `persistentData`   | Other persistent contract storage                             |
+| `temporaryData`    | Temporary contract storage                                    |
+
+Each category includes `count`, `estimatedSizeBytes`, and its base64 `readOnly`
+and `readWrite` arrays. Byte estimates measure serialized ledger keys, including
+XDR padding. Stored values are unavailable in a footprint. Classic account and
+trustline keys contribute to overall footprint statistics, but not these four
+contract storage categories.
+
+For Stellar Asset Contracts, `contractType` is `"sac"` and `isSAC` is `true`.
+`assetInfo` contains `{ "code": "XLM" }` for native balances or an asset code and
+issuer account for issued assets. SAC recognition verifies the network-specific
+asset-derived contract address, or the contract instance's built-in SAC executable.
+For contract balances without classic trustlines, the service reads the instance's
+`AssetInfo` metadata. Metadata lookup failures leave the footprint usable. With
+multiple SACs, inspect `sacContracts` for each asset; top-level `assetInfo` is
+included only when one SAC has known asset metadata.
+
+## Reviewing footprint changes
+
+`POST /footprint/diff?format=markdown` accepts the same `before` and `after`
+base64 footprint arrays as the JSON endpoint and returns `text/markdown`:
+
+```markdown
+| Change Type | Entry Type   | Contract ID / Account | Access Mode |
+| ----------- | ------------ | --------------------- | ----------- |
+| +           | Account      | G...                  | RO          |
+| -           | ContractData | C...                  | RW          |
+| modified    | ContractData | C...                  | RO → RW     |
+```
+
+An access mode change is one `modified` row. Without `format=markdown`, the JSON
+response remains `{ "success": true, "data": { "added": ..., "removed": ..., "unchanged": ... } }`.
+
+## Further reading
 
 - [API Documentation](../api/README.md) - Complete reference for all endpoints
 - [Integration Examples](../examples/) - Code samples in multiple languages

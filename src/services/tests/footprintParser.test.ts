@@ -1,9 +1,18 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import {
+  contractDataKey,
+  sacFootprint,
+  sacInstanceEntry,
+  TEST_ACCOUNT,
+} from "../../tests/fixtures/footprints";
+import {
   parseFootprint,
   extractContracts,
   detectTokenContract,
+  isSacContract,
+  detectSacContracts,
+  calculateFootprintStats,
 } from "../footprintParser";
 
 // ── XDR Fixtures ─────────────────────────────────────────────────────────────
@@ -24,6 +33,257 @@ const ACCOUNT_XDR = "AAAAAAAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1w==";
 /** TrustLine ledger key */
 const TRUSTLINE_XDR =
   "AAAAAQAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1wAAAAFVU0RDAAAAAOC5H/7peiRPvVLqr0yqYyUbiX9o1toddz1bmyboUP/X";
+
+describe("storage breakdown", () => {
+  it("separates instance, code, persistent and temporary keys with exact XDR sizes", () => {
+    const instance = contractDataKey(
+      1,
+      StellarSdk.xdr.ScVal.scvLedgerKeyContractInstance(),
+    ).toXDR("base64");
+    const persistent = contractDataKey(
+      1,
+      StellarSdk.xdr.ScVal.scvString("settings"),
+    ).toXDR("base64");
+    const temporary = contractDataKey(
+      1,
+      StellarSdk.xdr.ScVal.scvString("session"),
+      StellarSdk.xdr.ContractDataDurability.temporary(),
+    ).toXDR("base64");
+    const footprint = {
+      readOnly: [CONTRACT_CODE_XDR, persistent, ACCOUNT_XDR],
+      readWrite: [instance, temporary, TRUSTLINE_XDR],
+    };
+    const parsed = parseFootprint(footprint);
+    for (const [category, key, mode] of [
+      ["contractCode", CONTRACT_CODE_XDR, "readOnly"],
+      ["contractInstance", instance, "readWrite"],
+      ["persistentData", persistent, "readOnly"],
+      ["temporaryData", temporary, "readWrite"],
+    ] as const) {
+      expect(parsed.breakdown[category]).toEqual({
+        count: 1,
+        estimatedSizeBytes: Buffer.from(key, "base64").length,
+        readOnly: mode === "readOnly" ? [key] : [],
+        readWrite: mode === "readWrite" ? [key] : [],
+      });
+    }
+    const stats = calculateFootprintStats(footprint, parsed);
+    expect(stats.breakdown).toEqual(parsed.breakdown);
+    expect(stats.totalEntries).toBe(6);
+    expect(stats.estimatedSizeBytes).toBe(
+      [...footprint.readOnly, ...footprint.readWrite].reduce(
+        (sum, key) =>
+          sum + StellarSdk.xdr.LedgerKey.fromXDR(key, "base64").toXDR().length,
+        0,
+      ),
+    );
+    expect(parsed.readOnly.map((entry) => entry.xdr)).toEqual(
+      footprint.readOnly,
+    );
+    expect(parsed.readWrite.map((entry) => entry.xdr)).toEqual(
+      footprint.readWrite,
+    );
+  });
+
+  it("treats symbols named INSTANCE as ordinary storage and uses durability", () => {
+    const persistent = contractDataKey(
+      1,
+      StellarSdk.xdr.ScVal.scvSymbol("INSTANCE"),
+    );
+    const temporary = contractDataKey(
+      1,
+      StellarSdk.xdr.ScVal.scvSymbol("INSTANCE"),
+      StellarSdk.xdr.ContractDataDurability.temporary(),
+    );
+    const result = parseFootprint({
+      readOnly: [persistent.toXDR("base64"), temporary.toXDR("base64")],
+      readWrite: [],
+    });
+    expect(result.breakdown.contractInstance.count).toBe(0);
+    expect(result.readOnly.map((entry) => entry.storageType)).toEqual([
+      "persistentData",
+      "temporaryData",
+    ]);
+  });
+
+  it("returns zeroed categories for empty and unsupported footprints", () => {
+    for (const footprint of [
+      { readOnly: [], readWrite: [] },
+      { readOnly: ["bad-xdr", ACCOUNT_XDR], readWrite: [TRUSTLINE_XDR] },
+    ]) {
+      const stats = calculateFootprintStats(footprint);
+      expect(
+        Object.values(stats.breakdown).every(
+          (category) =>
+            category.count === 0 && category.estimatedSizeBytes === 0,
+        ),
+      ).toBe(true);
+    }
+  });
+});
+
+describe("Stellar Asset Contract metadata", () => {
+  function raw(data: StellarSdk.SorobanDataBuilder) {
+    const footprint = data.build().resources().footprint();
+    return {
+      readOnly: footprint.readOnly().map((key) => key.toXDR("base64")),
+      readWrite: footprint.readWrite().map((key) => key.toXDR("base64")),
+    };
+  }
+
+  it.each([
+    StellarSdk.Asset.native(),
+    new StellarSdk.Asset("USDC", TEST_ACCOUNT),
+    new StellarSdk.Asset("LONGASSET", TEST_ACCOUNT),
+  ])(
+    "recognizes %s balances from real SAC and classic ledger keys",
+    (asset) => {
+      const footprint = raw(sacFootprint(asset));
+      const result = parseFootprint(footprint);
+      const assetInfo = asset.isNative()
+        ? { code: "XLM" }
+        : { code: asset.getCode(), issuer: TEST_ACCOUNT };
+      expect(result.isSAC).toBe(true);
+      expect(result.assetInfo).toEqual(assetInfo);
+      expect(result.sacContracts).toEqual([
+        {
+          contractId: StellarSdk.StrKey.decodeContract(
+            asset.contractId(StellarSdk.Networks.TESTNET),
+          ).toString("hex"),
+          isSAC: true,
+          assetInfo,
+        },
+      ]);
+      expect(
+        [...result.readOnly, ...result.readWrite].every(
+          (entry) =>
+            entry.isSAC &&
+            JSON.stringify(entry.assetInfo) === JSON.stringify(assetInfo),
+        ),
+      ).toBe(true);
+      expect(result.readOnly.map((entry) => entry.xdr)).toEqual(
+        footprint.readOnly,
+      );
+      expect(result.readWrite.map((entry) => entry.xdr)).toEqual(
+        footprint.readWrite,
+      );
+    },
+  );
+
+  it("uses the selected network when checking asset-derived addresses", () => {
+    const asset = StellarSdk.Asset.native();
+    const mainnetId = asset.contractId(StellarSdk.Networks.PUBLIC);
+    const footprint = {
+      readOnly: [
+        contractDataKey(0, undefined, undefined, mainnetId).toXDR("base64"),
+      ],
+      readWrite: [],
+    };
+    expect(parseFootprint(footprint).isSAC).toBe(false);
+    expect(
+      parseFootprint(footprint, StellarSdk.Networks.PUBLIC).assetInfo,
+    ).toEqual({ code: "XLM" });
+    expect(
+      isSacContract(mainnetId, { code: "XLM" }, StellarSdk.Networks.PUBLIC),
+    ).toBe(true);
+    expect(isSacContract("invalid")).toBe(false);
+    expect(
+      isSacContract(mainnetId, { code: "OTHER" }, StellarSdk.Networks.PUBLIC),
+    ).toBe(false);
+  });
+
+  it("does not label arbitrary Balance keys or standalone classic trustlines as SAC", () => {
+    const key = contractDataKey(
+      99,
+      StellarSdk.xdr.ScVal.scvVec([StellarSdk.xdr.ScVal.scvSymbol("Balance")]),
+    );
+    const result = parseFootprint({
+      readOnly: [key.toXDR("base64"), TRUSTLINE_XDR, ACCOUNT_XDR],
+      readWrite: [],
+    });
+    expect(result.isSAC).toBe(false);
+    expect(result.assetInfo).toBeUndefined();
+    expect(result.readOnly.every((entry) => entry.isSAC === false)).toBe(true);
+  });
+
+  it("keeps metadata for every asset in a multiasset footprint", () => {
+    const native = raw(sacFootprint(StellarSdk.Asset.native()));
+    const credit = raw(
+      sacFootprint(new StellarSdk.Asset("USDC", TEST_ACCOUNT)),
+    );
+    const result = parseFootprint({
+      readOnly: [...native.readOnly, ...credit.readOnly],
+      readWrite: [...native.readWrite, ...credit.readWrite],
+    });
+    expect(result.sacContracts).toHaveLength(2);
+    expect(result.assetInfo).toBeUndefined();
+  });
+
+  it.each([
+    new StellarSdk.Asset("USDC", TEST_ACCOUNT),
+    new StellarSdk.Asset("LONGASSET", TEST_ACCOUNT),
+  ])(
+    "reads %s AssetInfo from the actual SAC executable without a classic trustline",
+    async (asset) => {
+      const footprint = raw(sacFootprint(asset));
+      footprint.readWrite = footprint.readWrite.slice(0, 1);
+      const initial = parseFootprint(footprint);
+      expect(initial.isSAC).toBe(false);
+      const instance = sacInstanceEntry(asset);
+      const server = {
+        getLedgerEntries: jest.fn().mockResolvedValue({
+          entries: [
+            { val: StellarSdk.xdr.LedgerEntryData.fromXDR(instance.toXDR()) },
+          ],
+        }),
+      } as unknown as StellarSdk.rpc.Server;
+      const sacs = await detectSacContracts(
+        [...initial.readOnly, ...initial.readWrite],
+        server,
+        StellarSdk.Networks.TESTNET,
+      );
+      const parsed = parseFootprint(
+        footprint,
+        StellarSdk.Networks.TESTNET,
+        sacs,
+      );
+      expect(parsed.isSAC).toBe(true);
+      expect(parsed.assetInfo).toEqual({
+        code: asset.getCode(),
+        issuer: TEST_ACCOUNT,
+      });
+      expect(server.getLedgerEntries).toHaveBeenCalledWith(
+        StellarSdk.xdr.LedgerKey.fromXDR(footprint.readOnly[0], "base64"),
+      );
+    },
+  );
+
+  it("keeps footprints usable when SAC metadata lookup fails", async () => {
+    const entries = parseFootprint({
+      readOnly: [CONTRACT_DATA_XDR],
+      readWrite: [],
+    }).readOnly;
+    const server = {
+      getLedgerEntries: jest.fn().mockRejectedValue(new Error("unavailable")),
+    } as unknown as StellarSdk.rpc.Server;
+    await expect(
+      detectSacContracts(entries, server, StellarSdk.Networks.TESTNET),
+    ).resolves.toEqual([]);
+  });
+
+  it("recognizes the native SAC contract type without requesting WASM", async () => {
+    const server = {
+      getLedgerEntries: jest.fn(),
+    } as unknown as StellarSdk.rpc.Server;
+    expect(
+      await detectTokenContract(
+        StellarSdk.Asset.native().contractId(StellarSdk.Networks.TESTNET),
+        server,
+      ),
+    ).toBe("sac");
+    expect(server.getLedgerEntries).not.toHaveBeenCalled();
+  });
+});
 
 // ── parseFootprint ────────────────────────────────────────────────────────────
 
