@@ -84,7 +84,17 @@ For a detailed explanation of each component and design decisions, see [docs/arc
 
 ### Quick Start
 
-> **Prerequisites:** Node.js >= 18.0.0. Use [nvm](https://github.com/nvm-sh/nvm) and run `nvm use` to automatically switch to the correct version.
+> **Prerequisites:** Node.js >= 22.12.0. Use [nvm](https://github.com/nvm-sh/nvm) and run `nvm use` to automatically switch to the correct version.
+
+### Soroban transaction inspection
+
+Simulation includes a `ttl` map keyed by ledger key XDR and `ttlInfo` on parsed persistent Soroban footprint entries. Remaining lifetime is `liveUntilLedger - latestLedger`, using the simulation response ledger. `ttlWarnings` flags entries with fewer than 240,000 ledgers remaining; `requiresExtension` uses a 100,000 ledger safety threshold. Configure these with `TTL_WARNING_THRESHOLD_LEDGERS` and `TTL_EXTENSION_SAFETY_LEDGERS`. Archived entries report `requiresRestore`. Expiration fields are `null` whenever RPC does not supply the TTL; unavailable metadata never becomes a fabricated expiration. `cost.ttlExtension` recommends a relative `extendTo` ledger count and indicates whether restoration must happen first. The existing `warnings` array also includes TTL warnings.
+
+`POST /api/v1/simulate/dry-run` reads the transaction locally, without RPC configuration or requests. Each contract operation includes an `invocation` with its contract address, function name, formatted `args`, `argTypes`, and `interfaceEstimation`. Integers retain their full precision. SEP-41 and SEP-40 estimates match known method signatures; governance estimates use common method names. These are estimates of the invocation, not proof that the contract implements an interface. `authEntries` describes the authorization trees already present in the envelope; static analysis cannot discover additional authorization requested by contract execution.
+
+Simulation reads authorization from `result.auth` and walks each invocation tree. `requiredSigners` deduplicates credential authorizers; addresses appearing only in arguments do not become signers. `signerThresholdReports` compares supplied Ed25519 signer weights to ledger account thresholds per authorization tree. Payment calls use the medium threshold; common admin method names and contract creation use the high threshold as a conservative estimate, including nested calls. The report checks weights, not the cryptographic validity of address credential signatures or arbitrary contract authorization policies. A missing account entry or custom contract authorizer produces `null` threshold and sufficiency values. Signatures from different trees are never combined.
+
+The parser recognizes all active ledger key variants, including configuration and TTL keys. Unsupported future keys are returned as `Unknown` with their original base64 XDR.
 
 ```bash
 # Clone the repository

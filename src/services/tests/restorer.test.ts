@@ -58,7 +58,7 @@ describe("buildRestoreTransaction", () => {
       networkPassphrase: StellarSdk.Networks.TESTNET,
     });
     mockedGetRpcServer.mockReturnValue({
-      simulateTransaction: mockSimulateTransaction,
+      _simulateTransaction: mockSimulateTransaction,
       getAccount: mockGetAccount,
     } as unknown as StellarSdk.rpc.Server);
   });
@@ -109,7 +109,8 @@ describe("buildRestoreTransaction", () => {
     const result = await buildRestoreTransaction(txXdr);
 
     expect(result.needsRestore).toBe(true);
-    expect(result.fee).toBe(StellarSdk.BASE_FEE);
+    expect(result.fee).toBe("5100");
+    expect(result.resourceFee).toBe("5000");
     expect(typeof result.restoreXdr).toBe("string");
     expect(mockGetAccount).toHaveBeenCalledWith(sourcePublicKey);
 
@@ -119,6 +120,13 @@ describe("buildRestoreTransaction", () => {
     ) as StellarSdk.Transaction;
     expect(parsedRestoreTx.operations).toHaveLength(1);
     expect(parsedRestoreTx.operations[0].type).toBe("restoreFootprint");
+    expect(parsedRestoreTx.fee).toBe(result.fee);
+    const data = parsedRestoreTx.toEnvelope().v1().tx().ext().sorobanData();
+    expect(data.resources().footprint().readWrite()[0].toXDR()).toEqual(
+      ledgerKey.toXDR(),
+    );
+    expect(data.resourceFee().toString()).toBe("5000");
+    expect(parsedRestoreTx.signatures).toHaveLength(0);
   });
 
   it("uses innerTransaction.source when restoring a FeeBumpTransaction", async () => {
@@ -147,5 +155,77 @@ describe("buildRestoreTransaction", () => {
 
     expect(result.needsRestore).toBe(true);
     expect(mockGetAccount).toHaveBeenCalledWith(sourcePublicKey);
+  });
+});
+
+describe("archived contract code restoration", () => {
+  const code = StellarSdk.xdr.LedgerKey.contractCode(
+    new StellarSdk.xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, 2) }),
+  );
+  const instance = new StellarSdk.Contract(
+    StellarSdk.StrKey.encodeContract(Buffer.alloc(32, 7)),
+  ).getFootprint();
+
+  it.each([1024, 8192])(
+    "funds code and instance restoration using RPC rent for %i WASM bytes",
+    async (bytes) => {
+      const sample = buildSampleTransactions();
+      const resourceFee = BigInt(bytes * 10);
+      const data = new StellarSdk.SorobanDataBuilder()
+        .setReadWrite([instance, code])
+        .setResources(0, bytes, bytes)
+        .setResourceFee(0);
+      const server = {
+        _simulateTransaction: jest.fn().mockResolvedValue({
+          error: "LEDGER_ENTRY_RESTORATION_REQUIRED",
+          latestLedger: 123456,
+          restorePreamble: {
+            minResourceFee: resourceFee.toString(),
+            transactionData: data.build().toXDR("base64"),
+          },
+        }),
+        getAccount: jest
+          .fn()
+          .mockResolvedValue(
+            new StellarSdk.Account(sample.sourcePublicKey, "200"),
+          ),
+      };
+      mockedGetNetworkConfig.mockReturnValue({
+        rpcUrl: "https://soroban-testnet.stellar.org",
+        networkPassphrase: StellarSdk.Networks.TESTNET,
+      });
+      mockedGetRpcServer.mockReturnValue(
+        server as unknown as StellarSdk.rpc.Server,
+      );
+      const result = await buildRestoreTransaction(sample.txXdr);
+      const tx = StellarSdk.TransactionBuilder.fromXDR(
+        result.restoreXdr ?? "",
+        StellarSdk.Networks.TESTNET,
+      ) as StellarSdk.Transaction;
+      const actual = tx.toEnvelope().v1().tx().ext().sorobanData();
+      expect(tx.operations[0].type).toBe("restoreFootprint");
+      expect(actual.resources().footprint().readOnly()).toEqual([]);
+      expect(
+        actual
+          .resources()
+          .footprint()
+          .readWrite()
+          .map((k) => k.toXDR("base64")),
+      ).toEqual([instance, code].map((k) => k.toXDR("base64")));
+      expect(actual.resources().writeBytes()).toBe(bytes);
+      expect(actual.resourceFee().toString()).toBe(resourceFee.toString());
+      expect(tx.fee).toBe((100n + resourceFee).toString());
+    },
+  );
+
+  it("propagates simulation failures without a restoration preamble", async () => {
+    mockedGetRpcServer.mockReturnValue({
+      _simulateTransaction: jest
+        .fn()
+        .mockResolvedValue({ error: "contract failed" }),
+    } as unknown as StellarSdk.rpc.Server);
+    await expect(
+      buildRestoreTransaction(buildSampleTransactions().txXdr),
+    ).rejects.toThrow("contract failed");
   });
 });

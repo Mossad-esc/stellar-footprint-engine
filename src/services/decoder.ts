@@ -80,17 +80,7 @@ function normalizeXdrValue(value: unknown): unknown {
  * Serialize an XDR LedgerKey to a plain object by inspecting its arm/value.
  */
 function ledgerKeyToJson(key: StellarSdk.xdr.LedgerKey): unknown {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const arm = (key as any).arm();
-  const rawValue = (key as { value: () => unknown }).value();
-
-  const normalized = normalizeXdrValue(rawValue);
-
-  if (typeof normalized === "object" && normalized !== null) {
-    return { type: arm, ...(normalized as Record<string, unknown>) };
-  }
-
-  return { type: arm, value: normalized };
+  return { type: key.type, ...(key.value.toJson() as Record<string, unknown>) };
 }
 
 /**

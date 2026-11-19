@@ -142,13 +142,10 @@ describe("decodeXdr", () => {
         SOROBAN_INVOKE_XDR,
         StellarSdk.Networks.TESTNET,
       );
-      // In SDK v15, Transaction.operations returns plain JS objects without toXDR.
-      // Use the raw XDR operations from the internal transaction structure.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rawOps = (tx as any)._tx._attributes.operations as Array<{
-        toXDR: (fmt: string) => string;
-      }>;
-      const opXdr = rawOps[0].toXDR("base64");
+      const envelope = tx.toEnvelope();
+      if (envelope.type !== "envelopeTypeTx")
+        throw new Error("Expected a v1 envelope");
+      const opXdr = envelope.v1.tx.operations[0].toXDR("base64");
 
       const result = decodeXdr(opXdr, "operation");
 
@@ -166,12 +163,10 @@ describe("decodeXdr", () => {
         CLASSIC_PAYMENT_XDR,
         StellarSdk.Networks.TESTNET,
       );
-      // In SDK v15, Transaction.operations returns plain JS objects without toXDR.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rawOps = (tx as any)._tx._attributes.operations as Array<{
-        toXDR: (fmt: string) => string;
-      }>;
-      const opXdr = rawOps[0].toXDR("base64");
+      const envelope = tx.toEnvelope();
+      if (envelope.type !== "envelopeTypeTx")
+        throw new Error("Expected a v1 envelope");
+      const opXdr = envelope.v1.tx.operations[0].toXDR("base64");
 
       const result = decodeXdr(opXdr, "operation");
 

@@ -9,10 +9,39 @@ import {
   type FootprintEntry,
   type ContractType,
 } from "./footprintParser";
-import { getRpcServer, getNetworkConfig, Network } from "../config/stellar";
-import type { AssetInfo, SacContract, FootprintBreakdown } from "../types";
+import { optimizeFootprint } from "./optimizer";
+import { getRpcServer, Network } from "../config/stellar";
+import { FootprintStats } from "../types";
+
+/** Exact LedgerFootprint wire sizes, including both XDR array length prefixes. */
+export function calculateFootprintStats(
+  readOnly: string[],
+  readWrite: string[],
+): FootprintStats {
+  const footprint = new StellarSdk.xdr.LedgerFootprint({
+    readOnly: readOnly.map((key) =>
+      StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
+    ),
+    readWrite: readWrite.map((key) =>
+      StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
+    ),
+  });
+  return {
+    readOnlyCount: readOnly.length,
+    readWriteCount: readWrite.length,
+    totalEntries: readOnly.length + readWrite.length,
+    readOnlySizeBytes:
+      4 +
+      footprint.readOnly().reduce((sum, key) => sum + key.toXDR().length, 0),
+    readWriteSizeBytes:
+      4 +
+      footprint.readWrite().reduce((sum, key) => sum + key.toXDR().length, 0),
+    estimatedSizeBytes: footprint.toXDR().length,
+  };
+}
 
 export interface ExtractedFootprint {
+  footprintStats: FootprintStats;
   rawFootprint: {
     readOnly: string[];
     readWrite: string[];
@@ -43,25 +72,17 @@ export async function extractFootprint(
     | readonly StellarSdk.rpc.Api.SimulateTransactionSuccessResponse[],
   network: Network,
 ): Promise<ExtractedFootprint> {
-  const responses = (
-    Array.isArray(response) ? response : [response]
-  ) as readonly StellarSdk.rpc.Api.SimulateTransactionSuccessResponse[];
-  const footprints = responses.map((result) => {
-    if (!result.transactionData) {
-      throw new Error("Simulation succeeded but transactionData is missing");
-    }
-    return result.transactionData.build().resources().footprint();
-  });
+  if (!response.transactionData) {
+    throw new Error("Simulation succeeded but transactionData is missing");
+  }
+
+  const footprint = response.transactionData.build().resources.footprint;
   const rawFootprint = {
-    readOnly: footprints.flatMap((footprint) =>
-      footprint
-        .readOnly()
-        .map((e: StellarSdk.xdr.LedgerKey) => e.toXDR("base64")),
+    readOnly: footprint.readOnly.map((e: StellarSdk.xdr.LedgerKey) =>
+      e.toXDR("base64"),
     ),
-    readWrite: footprints.flatMap((footprint) =>
-      footprint
-        .readWrite()
-        .map((e: StellarSdk.xdr.LedgerKey) => e.toXDR("base64")),
+    readWrite: footprint.readWrite.map((e: StellarSdk.xdr.LedgerKey) =>
+      e.toXDR("base64"),
     ),
   };
 
@@ -101,6 +122,10 @@ export async function extractFootprint(
       : "unknown";
 
   return {
+    footprintStats: calculateFootprintStats(
+      rawFootprint.readOnly,
+      rawFootprint.readWrite,
+    ),
     rawFootprint,
     parsedFootprint,
     optimizationResult,
