@@ -9,8 +9,37 @@ import {
 } from "./footprintParser";
 import { optimizeFootprint } from "./optimizer";
 import { getRpcServer, Network } from "../config/stellar";
+import { FootprintStats } from "../types";
+
+/** Exact LedgerFootprint wire sizes, including both XDR array length prefixes. */
+export function calculateFootprintStats(
+  readOnly: string[],
+  readWrite: string[],
+): FootprintStats {
+  const footprint = new StellarSdk.xdr.LedgerFootprint({
+    readOnly: readOnly.map((key) =>
+      StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
+    ),
+    readWrite: readWrite.map((key) =>
+      StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
+    ),
+  });
+  return {
+    readOnlyCount: readOnly.length,
+    readWriteCount: readWrite.length,
+    totalEntries: readOnly.length + readWrite.length,
+    readOnlySizeBytes:
+      4 +
+      footprint.readOnly().reduce((sum, key) => sum + key.toXDR().length, 0),
+    readWriteSizeBytes:
+      4 +
+      footprint.readWrite().reduce((sum, key) => sum + key.toXDR().length, 0),
+    estimatedSizeBytes: footprint.toXDR().length,
+  };
+}
 
 export interface ExtractedFootprint {
+  footprintStats: FootprintStats;
   rawFootprint: {
     readOnly: string[];
     readWrite: string[];
@@ -65,6 +94,10 @@ export async function extractFootprint(
       : "unknown";
 
   return {
+    footprintStats: calculateFootprintStats(
+      rawFootprint.readOnly,
+      rawFootprint.readWrite,
+    ),
     rawFootprint,
     parsedFootprint,
     optimizationResult,

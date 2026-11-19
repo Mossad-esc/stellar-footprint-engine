@@ -1,8 +1,11 @@
 import { Network, getNetworkConfig, getRpcServer } from "@config/stellar";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
+import { calculateFootprintStats } from "./footprintExtractor";
 import {
   parseFootprint,
+  parseContractInvocation,
+  hasContractCreationInstance,
   extractContracts,
   detectTokenContract,
   type FootprintEntry,
@@ -168,33 +171,46 @@ function buildLedgerSequenceWarning(
 }
 
 /**
+ * Extract authorization entries from simulation response
  */
-function base64ByteLength(b64: string): number {
-  const len = b64.length;
-  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
-  return (len * 3) / 4 - padding;
+function _extractAuthEntries(
+  auth: StellarSdk.xdr.SorobanAuthorizationEntry[],
+): AuthEntry[] {
+  return auth.map((entry) => {
+    return {
+      contractId: "",
+      functionName: "",
+      xdr: entry.toXDR("base64"),
+    };
+  });
 }
 
-function calculateFootprintStats(
-  readOnly: string[],
-  readWrite: string[],
-): FootprintStats {
-  const readOnlySize = readOnly.reduce(
-    (sum, xdr) => sum + base64ByteLength(xdr),
-    0,
-  );
-  const readWriteSize = readWrite.reduce(
-    (sum, xdr) => sum + base64ByteLength(xdr),
-    0,
-  );
+/**
+ * Extract contract events from simulation response
+ */
+function _extractEvents(
+  response: StellarSdk.rpc.Api.SimulateTransactionResponse,
+): ContractEvent[] {
+  const events =
+    (response.events as unknown as StellarSdk.xdr.DiagnosticEvent[]) ?? [];
 
-  return {
-    readOnlyCount: readOnly.length,
-    readWriteCount: readWrite.length,
-    totalEntries: readOnly.length + readWrite.length,
-    estimatedSizeBytes: readOnlySize + readWriteSize,
-  };
+  return events.map((event: unknown) => {
+    const e = event as {
+      type?: () => { name?: string };
+      contractId?: () => Buffer;
+    };
+    return {
+      type: e.type?.()?.name || "unknown",
+      contractId: e.contractId?.()?.toString("hex") || "",
+      topics: [],
+      data: "",
+    };
+  });
 }
+
+/**
+ * Extract required signers from auth entries.
+ */
 
 /**
  * Result of a transaction simulation
@@ -588,40 +604,61 @@ function describeInvocation(
   };
 }
 
-/** Static analysis reads only the envelope; RPC configuration is not needed. */
-export function simulateDryRun(
-  xdr: string,
-  network: Network = "testnet",
-): DryRunResult {
-  const passphrases = {
-    testnet: StellarSdk.Networks.TESTNET,
-    mainnet: StellarSdk.Networks.PUBLIC,
-    futurenet: StellarSdk.Networks.FUTURENET,
-  };
-  const transaction = StellarSdk.TransactionBuilder.fromXDR(
-    xdr,
-    passphrases[network],
-  );
-  const inner =
-    transaction instanceof StellarSdk.FeeBumpTransaction
-      ? transaction.innerTransaction
-      : transaction;
-  const operations = inner.operations.map((op) => {
-    const basic = { type: op.type, source: op.source ?? null };
-    if (op.type !== "invokeHostFunction") return basic;
+    const op = tx.operations[0];
     const invocation =
-      op.func.type === "hostFunctionTypeInvokeContract"
-        ? describeInvocation(op.func.invokeContract)
+      op?.type === "invokeHostFunction" && op.func
+        ? parseContractInvocation(op.func, networkPassphrase)
         : undefined;
-    const authorization = extractRequiredSigners(
-      op.auth ?? [],
-      op.source ?? inner.source,
+    if (
+      invocation?.isContractCreation &&
+      !hasContractCreationInstance(
+        invocation,
+        processed.rawFootprint?.readWrite ?? [],
+      )
+    ) {
+      return {
+        success: false,
+        error:
+          "Contract creation simulation is missing the writable contract instance key.",
+        code: ErrorCode.SIMULATION_DATA_MISSING,
+        invocation,
+        raw: response,
+      };
+    }
+
+    const ledgerWarning = buildLedgerSequenceWarning(
+      ledgerSequence,
+      response.latestLedger,
     );
     return {
-      ...basic,
+      success: true,
+      footprint: {
+        readOnly: processed.footprint?.readOnly ?? [],
+        readWrite: processed.footprint?.readWrite ?? [],
+      },
       invocation,
-      authEntries: authorization.authEntries,
-      requiredSigners: authorization.requiredSigners,
+      contractId: invocation?.isContractCreation
+        ? invocation.contractId
+        : undefined,
+      contracts: processed.contracts,
+      contractType: processed.contractType,
+      ttl: processed.ttl,
+      optimized: processed.optimized,
+      rawFootprint: processed.rawFootprint,
+      footprintStats: processed.footprintStats,
+      cost: {
+        cpuInsns: responseCost?.cpuInsns ?? "0",
+        memBytes: responseCost?.memBytes ?? "0",
+      },
+      warnings: [
+        ...buildTtlWarnings(processed.ttl ?? {}),
+        ...(ledgerWarning ? [ledgerWarning] : []),
+      ],
+      requiredSigners: processed.requiredSigners,
+      threshold: processed.threshold,
+      raw: response,
+      upgradedFromV0: upgradedFromV0 || undefined,
+      diagnosticEvents,
     };
   });
   return {

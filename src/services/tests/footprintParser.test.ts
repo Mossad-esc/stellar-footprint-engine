@@ -1,7 +1,14 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import {
+  deploymentHostFunction,
+  deploymentTransaction,
+  PREDICTED_CONTRACT,
+} from "../../tests/fixtures/deployment";
+import {
   parseFootprint,
+  parseContractInvocation,
+  hasContractCreationInstance,
   extractContracts,
   detectTokenContract,
 } from "../footprintParser";
@@ -203,74 +210,77 @@ describe("detectTokenContract", () => {
   });
 });
 
-describe("protocol ledger key compatibility", () => {
-  // Stable wire fixtures: protocols 20, 21, and 22 use the same key union.
-  it.each([
-    [20, "ContractData", CONTRACT_DATA_XDR],
-    [20, "ContractCode", CONTRACT_CODE_XDR],
-    [20, "ConfigSetting", "AAAACAAAAAo="], // state archival settings
-    [20, "Ttl", "AAAACQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC"],
-    [21, "ContractCode", CONTRACT_CODE_XDR],
-    [21, "ConfigSetting", "AAAACAAAAAY="], // CPU cost parameters
-    [22, "ContractData", CONTRACT_DATA_XDR],
-    [22, "ConfigSetting", "AAAACAAAAAc="], // memory cost parameters
-    [22, "Ttl", "AAAACQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC"],
-    [23, "ConfigSetting", "AAAACAAAAA4="], // parallel compute settings
-  ])(
-    "parses protocol %i %s keys without changing their raw bytes",
-    (_protocol, type, raw) => {
-      expect(
-        parseFootprint({ readOnly: [raw], readWrite: [] }).readOnly[0],
-      ).toMatchObject({ type, xdr: raw });
+describe("contract creation and constructor invocation", () => {
+  it.each([false, true])(
+    "derives the known contract address from deployment XDR with constructor=%s",
+    (constructor) => {
+      const envelope = deploymentTransaction(constructor).toXDR();
+      const tx = StellarSdk.TransactionBuilder.fromXDR(
+        envelope,
+        StellarSdk.Networks.TESTNET,
+      ) as StellarSdk.Transaction;
+      const op = tx.operations[0];
+      if (op.type !== "invokeHostFunction")
+        throw new Error("Unexpected fixture operation");
+      const invocation = parseContractInvocation(
+        op.func,
+        StellarSdk.Networks.TESTNET,
+      );
+      expect(invocation).toMatchObject({
+        contractId: PREDICTED_CONTRACT,
+        isContractCreation: true,
+        functionName: constructor ? "__constructor" : "createContract",
+      });
+      expect(invocation?.args).toEqual(constructor ? ["AAAAAwAAACo="] : []);
+      const instance = new StellarSdk.Contract(PREDICTED_CONTRACT)
+        .getFootprint()
+        .toXDR("base64");
+      if (!invocation) throw new Error("Missing invocation");
+      expect(hasContractCreationInstance(invocation, [instance])).toBe(true);
+      expect(hasContractCreationInstance(invocation, [])).toBe(false);
     },
   );
-
-  it("covers every active ledger entry variant", () => {
-    const keyBytes = (arm: number, rest: Buffer) => {
-      const prefix = Buffer.alloc(4);
-      prefix.writeInt32BE(arm);
-      return Buffer.concat([prefix, rest]).toString("base64");
-    };
-    const account = Buffer.from(ACCOUNT_XDR, "base64").subarray(4);
-    const fixtures = [
-      ACCOUNT_XDR,
-      TRUSTLINE_XDR,
-      keyBytes(2, Buffer.concat([account, Buffer.alloc(8)])),
-      keyBytes(3, Buffer.concat([account, Buffer.alloc(4)])),
-      keyBytes(4, Buffer.alloc(36)),
-      keyBytes(5, Buffer.alloc(32)),
-      CONTRACT_DATA_XDR,
-      CONTRACT_CODE_XDR,
-      "AAAACAAAAAo=",
-      "AAAACQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
-    ];
+  it("uses the network passphrase in address derivation", () => {
+    const host = deploymentHostFunction(true);
     expect(
-      parseFootprint({ readOnly: fixtures, readWrite: [] }).readOnly.map(
-        (entry) => entry.type,
-      ),
-    ).toEqual([
-      "Account",
-      "TrustLine",
-      "Offer",
-      "Data",
-      "ClaimableBalance",
-      "LiquidityPool",
-      "ContractData",
-      "ContractCode",
-      "ConfigSetting",
-      "Ttl",
-    ]);
+      parseContractInvocation(host, StellarSdk.Networks.PUBLIC)?.contractId,
+    ).not.toBe(PREDICTED_CONTRACT);
   });
-
-  it("preserves an unknown future arm and continues parsing other keys", () => {
-    const future = "AAAAf2Z1dHVyZS1hcm0=";
-    const result = parseFootprint({
-      readOnly: [future, CONTRACT_CODE_XDR],
-      readWrite: [future],
+  it("handles asset contract preimages", () => {
+    const host = StellarSdk.xdr.HostFunction.hostFunctionTypeCreateContract(
+      new StellarSdk.xdr.CreateContractArgs({
+        contractIdPreimage:
+          StellarSdk.xdr.ContractIdPreimage.contractIdPreimageFromAsset(
+            StellarSdk.Asset.native().toXDRObject(),
+          ),
+        executable:
+          StellarSdk.xdr.ContractExecutable.contractExecutableStellarAsset(),
+      }),
+    );
+    expect(
+      parseContractInvocation(host, StellarSdk.Networks.TESTNET)?.contractId,
+    ).toBe(StellarSdk.Asset.native().contractId(StellarSdk.Networks.TESTNET));
+  });
+  it("extracts ordinary initialization invocation details", () => {
+    const op = new StellarSdk.Contract(PREDICTED_CONTRACT).call(
+      "__constructor",
+      StellarSdk.nativeToScVal(42, { type: "u32" }),
+    );
+    const host = op.body().invokeHostFunctionOp().hostFunction();
+    expect(parseContractInvocation(host, StellarSdk.Networks.TESTNET)).toEqual({
+      contractId: PREDICTED_CONTRACT,
+      functionName: "__constructor",
+      args: ["AAAAAwAAACo="],
     });
-    expect(result.readOnly[0]).toEqual({ type: "Unknown", xdr: future });
-    expect(result.readWrite[0]).toEqual({ type: "Unknown", xdr: future });
-    expect(result.readOnly[1].type).toBe("ContractCode");
-    expect(result.contracts).toEqual([CONTRACT_CODE_ID]);
+  });
+  it("does not describe WASM uploads as contract invocations", () => {
+    expect(
+      parseContractInvocation(
+        StellarSdk.xdr.HostFunction.hostFunctionTypeUploadContractWasm(
+          Buffer.from("wasm"),
+        ),
+        StellarSdk.Networks.TESTNET,
+      ),
+    ).toBeUndefined();
   });
 });

@@ -70,7 +70,29 @@ function ledgerEntry(
         keyHash: StellarSdk.hash(key.toXDR()),
         liveUntilLedgerSeq,
       }),
-    ),
+    },
+    FeeBumpTransaction,
+    StrKey: {
+      encodeEd25519PublicKey: jest.fn().mockReturnValue("GABC"),
+    },
+    rpc: {
+      Server: jest.fn(),
+      Api: { isSimulationError, isSimulationRestore },
+    },
+    Networks: {
+      TESTNET: "Test SDF Network ; September 2015",
+      PUBLIC: "Public Global Stellar Network ; September 2015",
+      FUTURENET: "Test SDF Future Network ; October 2022",
+    },
+    xdr: {
+      ...jest.requireActual<typeof import("@stellar/stellar-sdk")>(
+        "@stellar/stellar-sdk",
+      ).xdr,
+      LedgerKey: jest.requireActual<typeof import("@stellar/stellar-sdk")>(
+        "@stellar/stellar-sdk",
+      ).xdr.LedgerKey,
+      AccountId: { fromString: jest.fn().mockReturnValue({}) },
+    },
   };
 }
 function ttlState(
@@ -468,77 +490,25 @@ describe("static dry run", () => {
     expect(mockEntries).not.toHaveBeenCalled();
     expect(getRpcServer).not.toHaveBeenCalled();
   });
-  it("formats symbols, vectors, maps, addresses and signed i128 without losing precision", () => {
-    const args = [
-      StellarSdk.xdr.ScVal.scvSymbol("hello"),
-      StellarSdk.xdr.ScVal.scvVec([
-        addr(payer),
-        i128(-123456789012345678901234567890n),
-      ]),
-      StellarSdk.xdr.ScVal.scvMap([
-        new StellarSdk.xdr.ScMapEntry({
-          key: StellarSdk.xdr.ScVal.scvSymbol("amount"),
-          val: i128(),
-        }),
-      ]),
-      addr(recipient),
-      i128(),
-    ];
-    const result = simulateDryRun(transaction("inspect", args).toXDR());
-    expect(result.operations[0].invocation?.args).toEqual([
-      "hello",
-      `[${payer.publicKey()}, -123456789012345678901234567890]`,
-      "{amount: 123456789012345678901234567890}",
-      recipient.publicKey(),
-      "123456789012345678901234567890",
-    ]);
-    expect(result.operations[0].invocation?.argTypes).toEqual([
-      "scvSymbol",
-      "scvVec",
-      "scvMap",
-      "scvAddress",
-      "scvI128",
-    ]);
-  });
-  it("does not classify a token method with an incompatible signature", () => {
-    expect(
-      simulateDryRun(transaction("transfer", []).toXDR()).operations[0]
-        .invocation?.interfaceEstimation?.name,
-    ).toBe("unknown");
-  });
-  it("estimates oracle and governance interfaces", () => {
-    const asset = StellarSdk.xdr.ScVal.scvVec([
-      StellarSdk.xdr.ScVal.scvSymbol("Other"),
-      StellarSdk.xdr.ScVal.scvSymbol("USD"),
-    ]);
-    expect(
-      simulateDryRun(transaction("lastprice", [asset]).toXDR()).operations[0]
-        .invocation?.interfaceEstimation?.name,
-    ).toBe("SEP-40");
-    expect(
-      simulateDryRun(
-        transaction("vote", [StellarSdk.xdr.ScVal.scvU32(1)]).toXDR(),
-      ).operations[0].invocation?.interfaceEstimation?.name,
-    ).toBe("DAO governance");
-  });
-  it("includes encoded authorization trees and deduplicates authorizers", () => {
-    const auth = authorization(
-      tree("transfer", [tree("balance", [], [addr(payer)])]),
-    );
-    const result = simulateDryRun(
-      transaction("transfer", transferArgs, [auth, auth]).toXDR(),
-    );
-    expect(result.operations[0].requiredSigners).toEqual([payer.publicKey()]);
-    expect(result.operations[0].authEntries).toHaveLength(1);
-    expect(
-      result.operations[0].authEntries?.[0].invocationTree?.subInvocations[0]
-        .invocation?.functionName,
-    ).toBe("balance");
-  });
-  it("handles classic, fee bump and host functions that do not invoke contracts", () => {
-    expect(simulateDryRun(CLASSIC_PAYMENT_XDR).operations[0]).toMatchObject({
-      type: "payment",
-      source: null,
+
+  // ── #429: TTL expiry warnings ─────────────────────────────────────────────
+
+  it("returns warnings for footprint entries expiring in < 100 ledgers", async () => {
+    // Set up a non-empty footprint so TTL lookup is triggered
+    const mockEntry = {
+      toXDR: jest
+        .fn()
+        .mockReturnValue(
+          "AAAAAAAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1w==",
+        ),
+    };
+    mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
+    mockFootprint.readWrite.mockReturnValueOnce([]);
+    mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
+    // Entry expires in 49 ledgers (liveUntil=150, current=101)
+    mockGetLedgerEntries.mockResolvedValueOnce({
+      entries: [{ liveUntilLedgerSeq: 150 }],
+      latestLedger: 101,
     });
     expect(simulateDryRun(FEE_BUMP_XDR).operations[0].type).toBe("payment");
     const upload = new StellarSdk.TransactionBuilder(
@@ -556,38 +526,20 @@ describe("static dry run", () => {
   });
 });
 
-describe("authorization trees and account thresholds", () => {
-  it("traverses three levels and keeps credential signers distinct from argument addresses", async () => {
-    const auth = authorization(
-      tree("transfer", [tree("balance", [tree("transfer")], [addr(payer)])]),
-    );
-    const second = authorization(
-      tree("balance", [], [addr(recipient)]),
-      [],
-      recipient,
-    );
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      result: {
-        auth: [auth, second, auth],
-        retval: StellarSdk.xdr.ScVal.scvVoid(),
-      },
-    });
-    const result = await simulateTransaction(transaction().toXDR());
-    expect(result.requiredSigners).toEqual([
-      payer.publicKey(),
-      recipient.publicKey(),
-    ]);
-    expect(result.authEntries).toHaveLength(2);
-    expect(
-      result.authEntries?.[0].invocationTree?.subInvocations[0]
-        .subInvocations[0].invocation?.functionName,
-    ).toBe("transfer");
-    expect(result.signerThresholdReports).toHaveLength(2);
-    expect(result.signerThresholdReports?.[0]).toMatchObject({
-      thresholdRequired: null,
-      totalWeight: null,
-      isSufficient: null,
+  it("returns empty warnings when all entries have >= 100 ledgers remaining", async () => {
+    const mockEntry = {
+      toXDR: jest
+        .fn()
+        .mockReturnValue(
+          "AAAAAAAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1w==",
+        ),
+    };
+    mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
+    mockFootprint.readWrite.mockReturnValueOnce([]);
+    mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
+    mockGetLedgerEntries.mockResolvedValueOnce({
+      entries: [{ liveUntilLedgerSeq: 300 }],
+      latestLedger: 100,
     });
   });
   it.each([

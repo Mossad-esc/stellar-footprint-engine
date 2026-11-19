@@ -1,22 +1,16 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import type { TtlInfo } from "../types";
-import { parseLedgerKey } from "./xdrParser";
+import { ContractInvocation } from "../types";
 
-export const LedgerKeyType = {
-  CONTRACT_DATA: "ContractData",
-  CONTRACT_CODE: "ContractCode",
-  ACCOUNT: "Account",
-  TRUST_LINE: "TrustLine",
-  OFFER: "Offer",
-  DATA: "Data",
-  CLAIMABLE_BALANCE: "ClaimableBalance",
-  LIQUIDITY_POOL: "LiquidityPool",
-  CONFIG_SETTING: "ConfigSetting",
-  TTL: "Ttl",
-  UNKNOWN: "Unknown",
-} as const;
-export type LedgerKeyType = (typeof LedgerKeyType)[keyof typeof LedgerKeyType];
+/**
+ * Types of ledger keys that can appear in a footprint
+ */
+export type LedgerKeyType =
+  | "ContractData"
+  | "ContractCode"
+  | "Account"
+  | "TrustLine"
+  | "Unknown";
 
 export interface FootprintEntry {
   /** Raw base64 is retained even if the SDK cannot decode a future key. */
@@ -182,4 +176,63 @@ export async function detectTokenContract(
     contractTypeCache.set(contractId, "unknown");
     return "unknown";
   }
+}
+
+/** Parse invocations and network-specific contract IDs before deployment. */
+export function parseContractInvocation(
+  hostFunction: StellarSdk.xdr.HostFunction,
+  networkPassphrase: string,
+): ContractInvocation | undefined {
+  switch (hostFunction.switch().name) {
+    case "hostFunctionTypeInvokeContract": {
+      const call = hostFunction.invokeContract();
+      return {
+        contractId: StellarSdk.Address.fromScAddress(
+          call.contractAddress(),
+        ).toString(),
+        functionName: call.functionName().toString(),
+        args: call.args().map((arg) => arg.toXDR("base64")),
+      };
+    }
+    case "hostFunctionTypeCreateContract":
+    case "hostFunctionTypeCreateContractV2": {
+      const constructor =
+        hostFunction.switch().name === "hostFunctionTypeCreateContractV2";
+      const creation = constructor
+        ? hostFunction.createContractV2()
+        : hostFunction.createContract();
+      const preimage = StellarSdk.xdr.HashIdPreimage.envelopeTypeContractId(
+        new StellarSdk.xdr.HashIdPreimageContractId({
+          networkId: StellarSdk.hash(Buffer.from(networkPassphrase)),
+          contractIdPreimage: creation.contractIdPreimage(),
+        }),
+      );
+      return {
+        contractId: StellarSdk.StrKey.encodeContract(
+          StellarSdk.hash(preimage.toXDR()),
+        ),
+        functionName: constructor ? "__constructor" : "createContract",
+        args: constructor
+          ? hostFunction
+              .createContractV2()
+              .constructorArgs()
+              .map((arg) => arg.toXDR("base64"))
+          : [],
+        isContractCreation: true,
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** The instance key of a newly created contract must be writable. */
+export function hasContractCreationInstance(
+  invocation: ContractInvocation,
+  readWrite: string[],
+): boolean {
+  const instance = new StellarSdk.Contract(invocation.contractId)
+    .getFootprint()
+    .toXDR("base64");
+  return readWrite.includes(instance);
 }
