@@ -4,8 +4,13 @@ import { Network } from "@config/stellar";
 import metrics from "@middleware/metrics";
 import { getCache } from "@services/cache";
 import { decodeXdr, type XdrType } from "@services/decoder";
-import { estimateFee, estimateFeeDetailed } from "@services/feeEstimator";
+import {
+  estimateFee,
+  estimateFeeDetailed,
+  type FeeEstimateOptions,
+} from "@services/feeEstimator";
 import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
+import { calculateFootprintStats } from "@services/footprintExtractor";
 import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
 import { simulateTransaction } from "@services/simulator";
@@ -597,13 +602,33 @@ export async function estimateFeeController(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { cpuInsns, memBytes, network } = req.body as {
+  const {
+    cpuInsns,
+    memBytes,
+    network,
+    operationType,
+    footprint,
+    xdr,
+    extendTo,
+  } = req.body as {
     cpuInsns?: string;
     memBytes?: string;
     network?: Network;
-  };
+  } & FeeEstimateOptions;
 
-  if (!cpuInsns || !memBytes) {
+  if (
+    operationType !== undefined &&
+    !["invoke", "restore", "extend"].includes(operationType)
+  ) {
+    return next(
+      new AppError(
+        "operationType must be invoke, restore or extend",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+  const maintenance = operationType === "restore" || operationType === "extend";
+  if (!maintenance && (!cpuInsns || !memBytes)) {
     return next(
       new AppError(
         "Missing required fields: cpuInsns and memBytes",
@@ -611,8 +636,13 @@ export async function estimateFeeController(
       ),
     );
   }
-
-  if (!/^\d+$/.test(cpuInsns) || !/^\d+$/.test(memBytes)) {
+  if (
+    [cpuInsns, memBytes].some(
+      (value) =>
+        value !== undefined &&
+        (typeof value !== "string" || !/^\d+$/.test(value)),
+    )
+  ) {
     return next(
       new AppError(
         "cpuInsns and memBytes must be non-negative integer strings",
@@ -620,22 +650,120 @@ export async function estimateFeeController(
       ),
     );
   }
-
   if (
     network &&
-    network !== NETWORKS.MAINNET &&
-    network !== NETWORKS.TESTNET &&
-    network !== NETWORKS.FUTURENET
+    ![NETWORKS.MAINNET, NETWORKS.TESTNET, NETWORKS.FUTURENET].includes(network)
   ) {
     return next(
       new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
     );
   }
-
-  const net: Network = (network as Network) || DEFAULT_NETWORK;
-
+  const net: Network = network || DEFAULT_NETWORK;
+  if (maintenance && !xdr && !footprint) {
+    return next(
+      new AppError(
+        "Restoration and extension estimates require xdr or footprint",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+  if (
+    extendTo !== undefined &&
+    (!Number.isInteger(extendTo) || extendTo < 0 || extendTo > 0xffffffff)
+  ) {
+    return next(
+      new AppError(
+        "extendTo must be an unsigned 32-bit integer",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+  if (operationType === "extend" && !xdr && extendTo === undefined) {
+    return next(
+      new AppError(
+        "Extension estimates require extendTo",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+  if (footprint) {
+    try {
+      if (
+        !Array.isArray(footprint.readOnly) ||
+        !Array.isArray(footprint.readWrite) ||
+        [...footprint.readOnly, ...footprint.readWrite].some(
+          (key) => typeof key !== "string",
+        )
+      )
+        throw new Error("Invalid footprint");
+      calculateFootprintStats(footprint.readOnly, footprint.readWrite);
+      if (
+        maintenance &&
+        (operationType === "restore"
+          ? footprint.readOnly.length > 0
+          : footprint.readWrite.length > 0)
+      ) {
+        throw new Error(
+          "Restoration requires only readWrite keys; extension requires only readOnly keys",
+        );
+      }
+    } catch {
+      return next(
+        new AppError(
+          "Invalid footprint for selected operation",
+          HTTP_STATUS.BAD_REQUEST,
+        ),
+      );
+    }
+  }
+  if (xdr !== undefined) {
+    const check = validateXdrInput(xdr);
+    if (!check.valid)
+      return next(
+        new AppError(check.error ?? "Invalid XDR", HTTP_STATUS.BAD_REQUEST),
+      );
+    if (maintenance) {
+      try {
+        const parsed = StellarSdk.TransactionBuilder.fromXDR(
+          xdr,
+          NETWORK_PASSPHRASES[net],
+        );
+        const inner =
+          parsed instanceof StellarSdk.FeeBumpTransaction
+            ? parsed.innerTransaction
+            : parsed;
+        const expected =
+          operationType === "restore"
+            ? "restoreFootprint"
+            : "extendFootprintTtl";
+        if (
+          inner.operations.length !== 1 ||
+          inner.operations[0].type !== expected
+        )
+          throw new Error("Mismatched operation");
+      } catch {
+        return next(
+          new AppError(
+            "XDR must contain exactly one operation matching operationType",
+            HTTP_STATUS.BAD_REQUEST,
+          ),
+        );
+      }
+    }
+  }
   try {
-    const result = await estimateFee(cpuInsns, memBytes, net);
+    const options: FeeEstimateOptions = {
+      operationType,
+      footprint,
+      xdr,
+      extendTo,
+    };
+    const result = await estimateFee(
+      cpuInsns ?? "0",
+      memBytes ?? "0",
+      net,
+      options,
+    );
     res.status(HTTP_STATUS.OK).json(result);
   } catch (err: unknown) {
     const message =

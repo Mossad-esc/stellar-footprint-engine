@@ -1,3 +1,5 @@
+import * as StellarSdk from "@stellar/stellar-sdk";
+
 import { getRpcServer } from "../../config/stellar";
 import { estimateFee, estimateFeeDetailed } from "../feeEstimator";
 
@@ -5,6 +7,9 @@ import { estimateFee, estimateFeeDetailed } from "../feeEstimator";
 
 jest.mock("@config/stellar", () => ({
   getRpcServer: jest.fn(),
+  getNetworkConfig: jest.fn().mockReturnValue({
+    networkPassphrase: "Test SDF Network ; September 2015",
+  }),
 }));
 
 const mockGetFeeStats = jest.fn();
@@ -421,5 +426,194 @@ describe("estimateFeeDetailed", () => {
 
     expect(result.baseFee).toBe("100");
     expect(result.inclusionFee).toBe("100");
+  });
+});
+
+describe("footprint bandwidth fees", () => {
+  it("charges the exact serialized size consistently in both estimators", async () => {
+    const footprint = {
+      readOnly: ["AAAABwICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC"],
+      readWrite: [],
+    };
+    const simple = await estimateFee("0", "0", "testnet", { footprint });
+    const detailed = await estimateFeeDetailed("0", "0", "testnet", {
+      footprint,
+    });
+    // 36-byte code key plus two four-byte vector prefixes.
+    expect(detailed.breakdown.overheadFee).toBe(String((300 + 44) * 200));
+    expect(simple.totalFee).toBe(detailed.totalStroops);
+  });
+});
+
+describe("maintenance operation fees", () => {
+  const code = "AAAABwICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
+  const instance =
+    "AAAABgAAAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAABQAAAAB";
+  const settings = [
+    {
+      name: "configSettingContractComputeV0",
+      contractCompute: () => ({ feeRatePerInstructionsIncrement: () => "25" }),
+    },
+    {
+      name: "configSettingContractLedgerCostV0",
+      contractLedgerCost: () => ({
+        feeWriteLedgerEntry: () => "20",
+        feeDiskReadLedgerEntry: () => "10",
+        feeDiskRead1Kb: () => "50",
+      }),
+    },
+    {
+      name: "configSettingContractLedgerCostExtV0",
+      contractLedgerCostExt: () => ({ feeWrite1Kb: () => "100" }),
+    },
+    {
+      name: "configSettingContractHistoricalDataV0",
+      contractHistoricalData: () => ({ feeHistorical1Kb: () => "5" }),
+    },
+    {
+      name: "configSettingContractBandwidthV0",
+      contractBandwidth: () => ({ feeTxSize1Kb: () => "10" }),
+    },
+  ];
+  const mockSimulate = jest.fn();
+  const mockEntries = jest.fn();
+  beforeEach(() => {
+    (getRpcServer as jest.Mock).mockReturnValue({
+      getFeeStats: mockGetFeeStats,
+      simulateTransaction: mockSimulate,
+      getLedgerEntries: mockEntries,
+    });
+    mockEntries.mockResolvedValue({
+      entries: settings.map((setting) => ({
+        val: {
+          configSetting: () => ({
+            ...setting,
+            switch: () => ({ name: setting.name }),
+          }),
+        },
+      })),
+    });
+  });
+  function simulation(bytes: number, fee: string, restoring = true) {
+    const keys = [instance, code].map((k) =>
+      StellarSdk.xdr.LedgerKey.fromXDR(k, "base64"),
+    );
+    const data = new StellarSdk.SorobanDataBuilder()
+      .setFootprint(restoring ? [] : keys, restoring ? keys : [])
+      .setResources(0, restoring ? bytes : 0, restoring ? bytes : 0)
+      .setResourceFee(fee);
+    mockSimulate.mockResolvedValue({
+      transactionData: data,
+      minResourceFee: fee,
+      latestLedger: 12345,
+    });
+  }
+  it.each([1024, 8192])(
+    "prices restoring %i bytes using current network write rates and RPC rent",
+    async (bytes) => {
+      simulation(bytes, String(bytes * 10));
+      const result = await estimateFee("99999", "0", "testnet", {
+        operationType: "restore",
+        footprint: { readOnly: [], readWrite: [instance, code] },
+      });
+      expect(result.operationType).toBe("restore");
+      expect(result.breakdown?.writeFee).toBe(
+        String(40 + (bytes / 1024) * 100),
+      );
+      expect(result.resourceFee).toBe(String(bytes * 10));
+      expect(result.totalFee).toBe(String(100 + bytes * 10));
+      const parts = result.breakdown;
+      expect(
+        BigInt(parts?.writeFee ?? "0") +
+          BigInt(parts?.refundableFee ?? "0") +
+          BigInt(parts?.otherResourceFee ?? "0"),
+      ).toBe(BigInt(result.resourceFee));
+      expect(BigInt(parts?.refundableFee ?? "0")).toBeGreaterThan(0n);
+      const tx = mockSimulate.mock.calls[0][0] as StellarSdk.Transaction;
+      expect(tx.operations[0].type).toBe("restoreFootprint");
+      expect(
+        tx
+          .toEnvelope()
+          .v1()
+          .tx()
+          .ext()
+          .sorobanData()
+          .resources()
+          .footprint()
+          .readWrite()
+          .map((k) => k.toXDR("base64")),
+      ).toEqual([instance, code]);
+    },
+  );
+  it("supports extension without charging writes of the contract entries", async () => {
+    simulation(0, "5000", false);
+    const result = await estimateFee("0", "0", "testnet", {
+      operationType: "extend",
+      footprint: { readOnly: [instance, code], readWrite: [] },
+      extendTo: 4096,
+    });
+    expect(result.breakdown?.writeFee).toBe("0");
+    expect(result.totalFee).toBe("5100");
+    const tx = mockSimulate.mock.calls.at(-1)?.[0] as StellarSdk.Transaction;
+    expect(tx.operations[0]).toMatchObject({
+      type: "extendFootprintTtl",
+      extendTo: 4096,
+    });
+  });
+  it("accepts ready to sign restore XDR and clamps the inclusion fee to the minimum", async () => {
+    simulation(1024, "10000");
+    mockFeeStats("50");
+    const tx = new StellarSdk.TransactionBuilder(
+      new StellarSdk.Account(StellarSdk.Keypair.random().publicKey(), "1"),
+      { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
+    )
+      .addOperation(StellarSdk.Operation.restoreFootprint({}))
+      .setTimeout(30)
+      .build();
+    const result = await estimateFee("0", "0", "testnet", {
+      operationType: "restore",
+      xdr: tx.toXDR(),
+    });
+    expect(result.baseFee).toBe("100");
+    expect(result.resourceFee).toBe("10000");
+  });
+  it("rejects missing ledger keys, extension duration and mismatched operations", async () => {
+    await expect(
+      estimateFee("0", "0", "testnet", { operationType: "restore" }),
+    ).rejects.toThrow(/xdr or footprint/);
+    await expect(
+      estimateFee("0", "0", "testnet", {
+        operationType: "extend",
+        footprint: { readOnly: [], readWrite: [] },
+      }),
+    ).rejects.toThrow(/extendTo/);
+    const tx = new StellarSdk.TransactionBuilder(
+      new StellarSdk.Account(StellarSdk.Keypair.random().publicKey(), "1"),
+      { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
+    )
+      .addOperation(StellarSdk.Operation.restoreFootprint({}))
+      .setTimeout(30)
+      .build();
+    await expect(
+      estimateFee("0", "0", "testnet", {
+        operationType: "extend",
+        xdr: tx.toXDR(),
+      }),
+    ).rejects.toThrow(/extendFootprintTtl/);
+  });
+  it("propagates RPC failures and missing network fee settings", async () => {
+    const options = {
+      operationType: "restore" as const,
+      footprint: { readOnly: [], readWrite: [code] },
+    };
+    mockSimulate.mockResolvedValue({ error: "Restoration simulation failed" });
+    await expect(estimateFee("0", "0", "testnet", options)).rejects.toThrow(
+      /simulation failed/,
+    );
+    simulation(1024, "10000");
+    mockEntries.mockResolvedValue({ entries: [] });
+    await expect(estimateFee("0", "0", "testnet", options)).rejects.toThrow(
+      /setting unavailable/,
+    );
   });
 });

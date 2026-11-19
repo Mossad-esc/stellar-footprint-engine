@@ -1,7 +1,14 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import {
+  deploymentHostFunction,
+  deploymentTransaction,
+  PREDICTED_CONTRACT,
+} from "../../tests/fixtures/deployment";
+import {
   parseFootprint,
+  parseContractInvocation,
+  hasContractCreationInstance,
   extractContracts,
   detectTokenContract,
 } from "../footprintParser";
@@ -208,5 +215,80 @@ describe("detectTokenContract", () => {
     } as unknown as StellarSdk.rpc.Server;
     const result = await detectTokenContract(id, server);
     expect(result).toBe("unknown");
+  });
+});
+
+describe("contract creation and constructor invocation", () => {
+  it.each([false, true])(
+    "derives the known contract address from deployment XDR with constructor=%s",
+    (constructor) => {
+      const envelope = deploymentTransaction(constructor).toXDR();
+      const tx = StellarSdk.TransactionBuilder.fromXDR(
+        envelope,
+        StellarSdk.Networks.TESTNET,
+      ) as StellarSdk.Transaction;
+      const op = tx.operations[0];
+      if (op.type !== "invokeHostFunction")
+        throw new Error("Unexpected fixture operation");
+      const invocation = parseContractInvocation(
+        op.func,
+        StellarSdk.Networks.TESTNET,
+      );
+      expect(invocation).toMatchObject({
+        contractId: PREDICTED_CONTRACT,
+        isContractCreation: true,
+        functionName: constructor ? "__constructor" : "createContract",
+      });
+      expect(invocation?.args).toEqual(constructor ? ["AAAAAwAAACo="] : []);
+      const instance = new StellarSdk.Contract(PREDICTED_CONTRACT)
+        .getFootprint()
+        .toXDR("base64");
+      if (!invocation) throw new Error("Missing invocation");
+      expect(hasContractCreationInstance(invocation, [instance])).toBe(true);
+      expect(hasContractCreationInstance(invocation, [])).toBe(false);
+    },
+  );
+  it("uses the network passphrase in address derivation", () => {
+    const host = deploymentHostFunction(true);
+    expect(
+      parseContractInvocation(host, StellarSdk.Networks.PUBLIC)?.contractId,
+    ).not.toBe(PREDICTED_CONTRACT);
+  });
+  it("handles asset contract preimages", () => {
+    const host = StellarSdk.xdr.HostFunction.hostFunctionTypeCreateContract(
+      new StellarSdk.xdr.CreateContractArgs({
+        contractIdPreimage:
+          StellarSdk.xdr.ContractIdPreimage.contractIdPreimageFromAsset(
+            StellarSdk.Asset.native().toXDRObject(),
+          ),
+        executable:
+          StellarSdk.xdr.ContractExecutable.contractExecutableStellarAsset(),
+      }),
+    );
+    expect(
+      parseContractInvocation(host, StellarSdk.Networks.TESTNET)?.contractId,
+    ).toBe(StellarSdk.Asset.native().contractId(StellarSdk.Networks.TESTNET));
+  });
+  it("extracts ordinary initialization invocation details", () => {
+    const op = new StellarSdk.Contract(PREDICTED_CONTRACT).call(
+      "__constructor",
+      StellarSdk.nativeToScVal(42, { type: "u32" }),
+    );
+    const host = op.body().invokeHostFunctionOp().hostFunction();
+    expect(parseContractInvocation(host, StellarSdk.Networks.TESTNET)).toEqual({
+      contractId: PREDICTED_CONTRACT,
+      functionName: "__constructor",
+      args: ["AAAAAwAAACo="],
+    });
+  });
+  it("does not describe WASM uploads as contract invocations", () => {
+    expect(
+      parseContractInvocation(
+        StellarSdk.xdr.HostFunction.hostFunctionTypeUploadContractWasm(
+          Buffer.from("wasm"),
+        ),
+        StellarSdk.Networks.TESTNET,
+      ),
+    ).toBeUndefined();
   });
 });

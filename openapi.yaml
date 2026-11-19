@@ -607,8 +607,12 @@ paths:
       summary: Estimate transaction fee
       description: |
         Returns a fee estimate given raw resource usage values (`cpuInsns`, `memBytes`).
-        Use the values from a `/simulate` response to compute the fee before building
-        and signing the final transaction.
+        Invocation estimates accept an optional footprint to charge its exact XDR size.
+        Select `operationType: restore` or `extend` and provide a transaction `xdr`
+        or ledger `footprint` to simulate the corresponding operation. These estimates
+        use current network fees and RPC rent pricing. CPU and memory fields are
+        optional for restoration and extension; extensions built from a footprint
+        also require `extendTo` (ledgers).
       operationId: estimateFee
       requestBody:
         required: true
@@ -1226,8 +1230,33 @@ components:
     # ── Fee estimation ───────────────────────────────────────────────────────
     EstimateFeeRequest:
       type: object
-      required: [cpuInsns, memBytes]
+      description: Invocation requires cpuInsns and memBytes. Restoration and extension require xdr or footprint.
       properties:
+        operationType:
+          type: string
+          enum: [invoke, restore, extend]
+          default: invoke
+        xdr:
+          type: string
+          description: Transaction envelope containing the selected restoration or extension operation
+        footprint:
+          type: object
+          required: [readOnly, readWrite]
+          description: Base64 LedgerKey XDR arrays. Restore uses readWrite only; extend uses readOnly only.
+          properties:
+            readOnly:
+              type: array
+              items:
+                type: string
+            readWrite:
+              type: array
+              items:
+                type: string
+        extendTo:
+          type: integer
+          minimum: 0
+          maximum: 4294967295
+          description: TTL extension in ledgers, required when building an extension from a footprint
         cpuInsns:
           type: string
           description: CPU instructions (non-negative integer string)
@@ -1242,17 +1271,36 @@ components:
     EstimateFeeResponse:
       type: object
       properties:
-        inclusionFee:
+        baseFee:
           type: string
-          description: Base inclusion fee in stroops
+          description: Recommended inclusion fee in stroops
         resourceFee:
           type: string
           description: Soroban resource fee in stroops
         totalFee:
           type: string
           description: Total recommended fee in stroops
-        network:
+        feeInXLM:
           type: string
+          description: Total fee in XLM with seven decimal places
+        operationType:
+          type: string
+          enum: [restore, extend]
+        breakdown:
+          type: object
+          description: Maintenance fee components using current rates and Core's default RPC envelope size adjustment
+          properties:
+            baseFee:
+              type: string
+            writeFee:
+              type: string
+              description: Entry and byte write charges excluding refundable TTL writes
+            refundableFee:
+              type: string
+              description: RPC rent budget including refundable TTL writes
+            otherResourceFee:
+              type: string
+              description: Instruction, disk read, history and bandwidth charges
 
     # ── Cache ─────────────────────────────────────────────────────────────────
     CacheInvalidateResponse:

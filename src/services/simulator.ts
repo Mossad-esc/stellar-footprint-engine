@@ -1,8 +1,11 @@
 import { Network, getNetworkConfig, getRpcServer } from "@config/stellar";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
+import { calculateFootprintStats } from "./footprintExtractor";
 import {
   parseFootprint,
+  parseContractInvocation,
+  hasContractCreationInstance,
   extractContracts,
   detectTokenContract,
   type FootprintEntry,
@@ -172,61 +175,6 @@ function buildLedgerSequenceWarning(
     return `ledgerSequence ${ledgerSequence} is more than 100 ledgers behind latest ledger ${latestLedger}.`;
   }
   return undefined;
-}
-
-/**
- */
-function base64ByteLength(b64: string): number {
-  const len = b64.length;
-  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
-  return (len * 3) / 4 - padding;
-}
-
-function calculateFootprintStats(
-  readOnly: string[],
-  readWrite: string[],
-): FootprintStats {
-  const readOnlySize = readOnly.reduce(
-    (sum, xdr) => sum + base64ByteLength(xdr),
-    0,
-  );
-  const readWriteSize = readWrite.reduce(
-    (sum, xdr) => sum + base64ByteLength(xdr),
-    0,
-  );
-
-  return {
-    readOnlyCount: readOnly.length,
-    readWriteCount: readWrite.length,
-    totalEntries: readOnly.length + readWrite.length,
-    estimatedSizeBytes: readOnlySize + readWriteSize,
-  };
-}
-
-/**
- * Extract contract invocation details from transaction
- */
-function _extractInvocation(
-  tx: StellarSdk.Transaction<
-    StellarSdk.Memo<StellarSdk.MemoType>,
-    StellarSdk.Operation[]
-  >,
-): ContractInvocation | undefined {
-  try {
-    const op = tx.operations[0];
-    if (!op || op.type !== "invokeHostFunction") {
-      return undefined;
-    }
-
-    // Basic extraction - can be improved to parse xdr.HostFunction
-    return {
-      contractId: "",
-      functionName: "",
-      args: [],
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -550,6 +498,28 @@ export async function simulateTransaction(
       responseCost,
     );
 
+    const op = tx.operations[0];
+    const invocation =
+      op?.type === "invokeHostFunction" && op.func
+        ? parseContractInvocation(op.func, networkPassphrase)
+        : undefined;
+    if (
+      invocation?.isContractCreation &&
+      !hasContractCreationInstance(
+        invocation,
+        processed.rawFootprint?.readWrite ?? [],
+      )
+    ) {
+      return {
+        success: false,
+        error:
+          "Contract creation simulation is missing the writable contract instance key.",
+        code: ErrorCode.SIMULATION_DATA_MISSING,
+        invocation,
+        raw: response,
+      };
+    }
+
     const ledgerWarning = buildLedgerSequenceWarning(
       ledgerSequence,
       response.latestLedger,
@@ -561,6 +531,10 @@ export async function simulateTransaction(
         readOnly: processed.footprint?.readOnly ?? [],
         readWrite: processed.footprint?.readWrite ?? [],
       },
+      invocation,
+      contractId: invocation?.isContractCreation
+        ? invocation.contractId
+        : undefined,
       contracts: processed.contracts,
       contractType: processed.contractType,
       ttl: processed.ttl,

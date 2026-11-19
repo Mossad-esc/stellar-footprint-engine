@@ -129,3 +129,58 @@ describe("POST /api/v1/estimate-fee", () => {
     });
   });
 });
+
+describe("operation selection", () => {
+  const code = "AAAABwICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
+  it.each(["restore", "extend"])(
+    "accepts %s footprints without invocation CPU or memory",
+    async (operationType) => {
+      const res = await request(app)
+        .post(BASE)
+        .send({
+          operationType,
+          footprint: {
+            readOnly: operationType === "extend" ? [code] : [],
+            readWrite: operationType === "restore" ? [code] : [],
+          },
+          extendTo: 4096,
+        });
+      expect(res.status).toBe(200);
+    },
+  );
+  it.each([
+    { operationType: "payment" },
+    { operationType: "restore" },
+    {
+      operationType: "restore",
+      footprint: { readOnly: [code], readWrite: [] },
+    },
+    {
+      operationType: "restore",
+      footprint: { readOnly: [], readWrite: ["invalid"] },
+    },
+    { operationType: "extend", footprint: { readOnly: [code], readWrite: [] } },
+    {
+      operationType: "extend",
+      footprint: { readOnly: [code], readWrite: [] },
+      extendTo: -1,
+    },
+    { operationType: "restore", xdr: "invalid" },
+  ])("rejects invalid operation input %j", async (body) => {
+    const res = await request(app)
+      .post(BASE)
+      .send({ ...body, cpuInsns: "0", memBytes: "0" });
+    expect(res.status).toBe(400);
+  });
+  it("accepts the explicit invoke selector with a serialized footprint", async () => {
+    const res = await request(app)
+      .post(BASE)
+      .send({
+        operationType: "invoke",
+        cpuInsns: "0",
+        memBytes: "0",
+        footprint: { readOnly: [code], readWrite: [] },
+      });
+    expect(res.status).toBe(200);
+  });
+});

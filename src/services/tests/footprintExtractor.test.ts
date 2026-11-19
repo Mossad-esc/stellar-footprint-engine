@@ -1,7 +1,10 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import * as stellarConfig from "../../config/stellar";
-import { extractFootprint } from "../footprintExtractor";
+import {
+  extractFootprint,
+  calculateFootprintStats,
+} from "../footprintExtractor";
 import * as footprintParser from "../footprintParser";
 
 jest.mock("../../config/stellar", () => ({
@@ -99,5 +102,63 @@ describe("extractFootprint", () => {
     expect(detectSpy).not.toHaveBeenCalled();
 
     detectSpy.mockRestore();
+  });
+});
+
+describe("serialized footprint sizes", () => {
+  const code = "AAAABwICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
+
+  it("counts fixed Stellar XDR fixtures including vector prefixes", () => {
+    // ContractCode: uint32 discriminator + 32-byte hash = 36 bytes.
+    // ContractData instance: discriminator + ScAddress + ScVal + durability = 48.
+    const stats = calculateFootprintStats([code], [CONTRACT_DATA_XDR]);
+    expect(stats).toEqual({
+      readOnlyCount: 1,
+      readWriteCount: 1,
+      totalEntries: 2,
+      readOnlySizeBytes: 40,
+      readWriteSizeBytes: 52,
+      estimatedSizeBytes: 92,
+    });
+    const expected = "AAAAAQ=="; // one-element vector prefix
+    const bytes = Buffer.concat([
+      Buffer.from(expected, "base64"),
+      Buffer.from(code, "base64"),
+      Buffer.from(expected, "base64"),
+      Buffer.from(CONTRACT_DATA_XDR, "base64"),
+    ]);
+    expect(StellarSdk.xdr.LedgerFootprint.fromXDR(bytes).toXDR()).toEqual(
+      bytes,
+    );
+    expect(stats.estimatedSizeBytes).toBe(bytes.length);
+  });
+
+  it("counts both empty vectors as eight bytes", () => {
+    expect(calculateFootprintStats([], [])).toMatchObject({
+      readOnlySizeBytes: 4,
+      readWriteSizeBytes: 4,
+      estimatedSizeBytes: 8,
+    });
+  });
+
+  it("includes variable ScVal padding and duplicates in wire sizes", () => {
+    const key = StellarSdk.xdr.LedgerKey.contractData(
+      new StellarSdk.xdr.LedgerKeyContractData({
+        contract: StellarSdk.Address.contract(
+          Buffer.alloc(32, 1),
+        ).toScAddress(),
+        key: StellarSdk.xdr.ScVal.scvSymbol("abcde"),
+        durability: StellarSdk.xdr.ContractDataDurability.persistent(),
+      }),
+    ).toXDR("base64");
+    expect(calculateFootprintStats([key, key], [])).toMatchObject({
+      readOnlySizeBytes: 124,
+      readWriteSizeBytes: 4,
+      estimatedSizeBytes: 128,
+    });
+  });
+
+  it("rejects malformed keys instead of reporting a misleading size", () => {
+    expect(() => calculateFootprintStats(["invalid"], [])).toThrow();
   });
 });

@@ -62,11 +62,12 @@ jest.mock("@stellar/stellar-sdk", () => {
       FUTURENET: "Test SDF Future Network ; October 2022",
     },
     xdr: {
-      LedgerKey: {
-        fromXDR: jest.fn().mockReturnValue({}),
-        account: jest.fn().mockReturnValue({}),
-        contractCode: jest.fn().mockReturnValue({}),
-      },
+      ...jest.requireActual<typeof import("@stellar/stellar-sdk")>(
+        "@stellar/stellar-sdk",
+      ).xdr,
+      LedgerKey: jest.requireActual<typeof import("@stellar/stellar-sdk")>(
+        "@stellar/stellar-sdk",
+      ).xdr.LedgerKey,
       AccountId: { fromString: jest.fn().mockReturnValue({}) },
     },
   };
@@ -276,7 +277,13 @@ describe("simulateTransaction", () => {
 
   it("returns warnings for footprint entries expiring in < 100 ledgers", async () => {
     // Set up a non-empty footprint so TTL lookup is triggered
-    const mockEntry = { toXDR: jest.fn().mockReturnValue("AAAA") };
+    const mockEntry = {
+      toXDR: jest
+        .fn()
+        .mockReturnValue(
+          "AAAAAAAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1w==",
+        ),
+    };
     mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
     mockFootprint.readWrite.mockReturnValueOnce([]);
     mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
@@ -295,7 +302,13 @@ describe("simulateTransaction", () => {
   });
 
   it("returns empty warnings when all entries have >= 100 ledgers remaining", async () => {
-    const mockEntry = { toXDR: jest.fn().mockReturnValue("AAAA") };
+    const mockEntry = {
+      toXDR: jest
+        .fn()
+        .mockReturnValue(
+          "AAAAAAAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1w==",
+        ),
+    };
     mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
     mockFootprint.readWrite.mockReturnValueOnce([]);
     mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
