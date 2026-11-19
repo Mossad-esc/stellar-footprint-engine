@@ -6,9 +6,7 @@ import { getRpcServer, Network } from "../config/stellar";
  * Simulate a transaction via RPC
  */
 export async function simulateViaRpc(
-  tx:
-    | StellarSdk.Transaction<StellarSdk.Memo, StellarSdk.Operation[]>
-    | StellarSdk.FeeBumpTransaction,
+  tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction,
   network: Network,
   signal?: AbortSignal,
   ledgerSequence?: number,

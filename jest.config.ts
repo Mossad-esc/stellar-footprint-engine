@@ -9,12 +9,15 @@ const config: Config = {
     "**/?(*.)+(spec|test).+(ts|tsx|js)",
   ],
   transform: {
-    "^.+\\.(ts|tsx)$": [
+    "^.+\\.[tj]sx?$": [
       "ts-jest",
       { tsconfig: "tsconfig.test.json", diagnostics: false },
     ],
   },
-  transformIgnorePatterns: ["/node_modules/(?!(uuid)/)"],
+  // SDK v17 uses ESM dependencies even through its CommonJS entry point.
+  transformIgnorePatterns: [
+    "/node_modules/(?!\\.pnpm/|uint8array-extras/|@noble/|@exodus/|@stellar/js-xdr/)",
+  ],
   collectCoverage: true,
   collectCoverageFrom: [
     "src/**/*.ts",

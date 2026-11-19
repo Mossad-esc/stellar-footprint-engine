@@ -167,11 +167,7 @@ describe("detectTokenContract", () => {
       "transfer transfer_from burn burn_from balance allowance approve decimals name symbol",
     );
     const mockEntry = {
-      val: {
-        contractCode: () => ({
-          code: () => sep41Wasm,
-        }),
-      },
+      val: { type: "contractCode", contractCode: { code: sep41Wasm } },
     };
     const server = makeMockServer([mockEntry]);
     const result = await detectTokenContract(id, server);
@@ -182,11 +178,7 @@ describe("detectTokenContract", () => {
     const id = "cc".repeat(32);
     const sparseWasm = Buffer.from("transfer balance");
     const mockEntry = {
-      val: {
-        contractCode: () => ({
-          code: () => sparseWasm,
-        }),
-      },
+      val: { type: "contractCode", contractCode: { code: sparseWasm } },
     };
     const server = makeMockServer([mockEntry]);
     const result = await detectTokenContract(id, server);
@@ -208,5 +200,77 @@ describe("detectTokenContract", () => {
     } as unknown as StellarSdk.rpc.Server;
     const result = await detectTokenContract(id, server);
     expect(result).toBe("unknown");
+  });
+});
+
+describe("protocol ledger key compatibility", () => {
+  // Stable wire fixtures: protocols 20, 21, and 22 use the same key union.
+  it.each([
+    [20, "ContractData", CONTRACT_DATA_XDR],
+    [20, "ContractCode", CONTRACT_CODE_XDR],
+    [20, "ConfigSetting", "AAAACAAAAAo="], // state archival settings
+    [20, "Ttl", "AAAACQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC"],
+    [21, "ContractCode", CONTRACT_CODE_XDR],
+    [21, "ConfigSetting", "AAAACAAAAAY="], // CPU cost parameters
+    [22, "ContractData", CONTRACT_DATA_XDR],
+    [22, "ConfigSetting", "AAAACAAAAAc="], // memory cost parameters
+    [22, "Ttl", "AAAACQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC"],
+    [23, "ConfigSetting", "AAAACAAAAA4="], // parallel compute settings
+  ])(
+    "parses protocol %i %s keys without changing their raw bytes",
+    (_protocol, type, raw) => {
+      expect(
+        parseFootprint({ readOnly: [raw], readWrite: [] }).readOnly[0],
+      ).toMatchObject({ type, xdr: raw });
+    },
+  );
+
+  it("covers every active ledger entry variant", () => {
+    const keyBytes = (arm: number, rest: Buffer) => {
+      const prefix = Buffer.alloc(4);
+      prefix.writeInt32BE(arm);
+      return Buffer.concat([prefix, rest]).toString("base64");
+    };
+    const account = Buffer.from(ACCOUNT_XDR, "base64").subarray(4);
+    const fixtures = [
+      ACCOUNT_XDR,
+      TRUSTLINE_XDR,
+      keyBytes(2, Buffer.concat([account, Buffer.alloc(8)])),
+      keyBytes(3, Buffer.concat([account, Buffer.alloc(4)])),
+      keyBytes(4, Buffer.alloc(36)),
+      keyBytes(5, Buffer.alloc(32)),
+      CONTRACT_DATA_XDR,
+      CONTRACT_CODE_XDR,
+      "AAAACAAAAAo=",
+      "AAAACQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
+    ];
+    expect(
+      parseFootprint({ readOnly: fixtures, readWrite: [] }).readOnly.map(
+        (entry) => entry.type,
+      ),
+    ).toEqual([
+      "Account",
+      "TrustLine",
+      "Offer",
+      "Data",
+      "ClaimableBalance",
+      "LiquidityPool",
+      "ContractData",
+      "ContractCode",
+      "ConfigSetting",
+      "Ttl",
+    ]);
+  });
+
+  it("preserves an unknown future arm and continues parsing other keys", () => {
+    const future = "AAAAf2Z1dHVyZS1hcm0=";
+    const result = parseFootprint({
+      readOnly: [future, CONTRACT_CODE_XDR],
+      readWrite: [future],
+    });
+    expect(result.readOnly[0]).toEqual({ type: "Unknown", xdr: future });
+    expect(result.readWrite[0]).toEqual({ type: "Unknown", xdr: future });
+    expect(result.readOnly[1].type).toBe("ContractCode");
+    expect(result.contracts).toEqual([CONTRACT_CODE_ID]);
   });
 });

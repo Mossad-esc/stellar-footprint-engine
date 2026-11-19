@@ -8,7 +8,10 @@ import { estimateFee, estimateFeeDetailed } from "@services/feeEstimator";
 import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
-import { simulateTransaction } from "@services/simulator";
+import {
+  simulateTransaction,
+  simulateDryRun as analyzeDryRun,
+} from "@services/simulator";
 import { validateXdr } from "@services/validator";
 import {
   createJob,
@@ -17,7 +20,6 @@ import {
   getJob,
   InvalidWebhookUrlError,
 } from "@services/webhook";
-import * as StellarSdk from "@stellar/stellar-sdk";
 import { AppError } from "@utils/AppError";
 import { rpcCircuitBreaker } from "@utils/circuitBreaker";
 import { validateXdrInput } from "@utils/validateXdrInput";
@@ -755,12 +757,6 @@ export function openApiSpec(req: Request, res: Response): void {
 // #333 — Dry-run: parse XDR locally, no RPC call
 // ---------------------------------------------------------------------------
 
-const NETWORK_PASSPHRASES: Record<string, string> = {
-  mainnet: StellarSdk.Networks.PUBLIC,
-  testnet: StellarSdk.Networks.TESTNET,
-  futurenet: StellarSdk.Networks.FUTURENET,
-};
-
 export function simulateDryRun(
   req: Request,
   res: Response,
@@ -774,28 +770,13 @@ export function simulateDryRun(
   }
 
   const net = (network as Network) || DEFAULT_NETWORK;
-  const passphrase = NETWORK_PASSPHRASES[net] ?? StellarSdk.Networks.TESTNET;
-
+  if (![NETWORKS.TESTNET, NETWORKS.MAINNET, NETWORKS.FUTURENET].includes(net)) {
+    return next(
+      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
+    );
+  }
   try {
-    const tx = StellarSdk.TransactionBuilder.fromXDR(xdr!, passphrase);
-
-    // FeeBumpTransaction wraps an inner transaction
-    const inner =
-      tx instanceof StellarSdk.FeeBumpTransaction ? tx.innerTransaction : tx;
-
-    const operations = inner.operations.map((op) => ({
-      type: op.type,
-      source: op.source ?? null,
-    }));
-
-    res.status(HTTP_STATUS.OK).json({
-      dryRun: true,
-      network: net,
-      sourceAccount: inner.source,
-      sequence: inner.sequence,
-      operationCount: operations.length,
-      operations,
-    });
+    res.status(HTTP_STATUS.OK).json(analyzeDryRun(xdr!, net));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to parse XDR";
     next(new AppError(message, HTTP_STATUS.BAD_REQUEST));

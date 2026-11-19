@@ -39,14 +39,14 @@ export async function extractFootprint(
     throw new Error("Simulation succeeded but transactionData is missing");
   }
 
-  const footprint = response.transactionData.build().resources().footprint();
+  const footprint = response.transactionData.build().resources.footprint;
   const rawFootprint = {
-    readOnly: footprint
-      .readOnly()
-      .map((e: StellarSdk.xdr.LedgerKey) => e.toXDR("base64")),
-    readWrite: footprint
-      .readWrite()
-      .map((e: StellarSdk.xdr.LedgerKey) => e.toXDR("base64")),
+    readOnly: footprint.readOnly.map((e: StellarSdk.xdr.LedgerKey) =>
+      e.toXDR("base64"),
+    ),
+    readWrite: footprint.readWrite.map((e: StellarSdk.xdr.LedgerKey) =>
+      e.toXDR("base64"),
+    ),
   };
 
   const parsedFootprint = parseFootprint(rawFootprint);

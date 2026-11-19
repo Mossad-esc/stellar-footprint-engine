@@ -10,7 +10,11 @@ import {
 } from "./footprintParser";
 import { optimizeFootprint } from "./optimizer";
 // import { calculateResourceFee } from "./feeEstimator"; // unused
-import { CACHE_TTL, CACHE_TTL_MS, ErrorCode } from "../constants";
+import {
+  ErrorCode,
+  TTL_WARNING_THRESHOLD_LEDGERS,
+  TTL_EXTENSION_SAFETY_LEDGERS,
+} from "../constants";
 import metrics from "../middleware/metrics";
 import { buildCacheKey, getCache } from "../services/cache";
 import {
@@ -19,145 +23,134 @@ import {
   ContractEvent,
   ContractInvocation,
   TtlInfo,
+  TtlExtensionRecommendation,
+  DryRunResult,
+  AuthorizationInvocation,
+  AuthorizationLevel,
+  SignerThresholdReport,
 } from "../types";
 import { rpcCircuitBreaker } from "../utils/circuitBreaker";
 import { withRetry } from "../utils/retry";
 import { sanitizeRpcError } from "../utils/rpcErrorSanitizer";
 
-// Cache for contract existence checks (contractIdString -> { exists: boolean, timestamp: number })
-const contractExistenceCache = new Map<
-  string,
-  { exists: boolean; timestamp: number }
->();
-
-function extractRequiredSigners(
-  auth: StellarSdk.xdr.SorobanAuthorizationEntry[],
-): { requiredSigners: string[]; threshold: number } {
-  const signers = new Set<string>();
-  for (const entry of auth) {
-    try {
-      const credentials = entry.credentials();
-      if (credentials.switch().name === "sorobanCredentialsAddress") {
-        const address = credentials.address();
-
-        const credAddress = address as StellarSdk.xdr.SorobanAddressCredentials;
-        const accountId = StellarSdk.StrKey.encodeEd25519PublicKey(
-          credAddress.address().accountId().ed25519(),
-        );
-        signers.add(accountId);
-      }
-    } catch {
-      // ignore invalid entries
-    }
-  }
-  return { requiredSigners: Array.from(signers), threshold: signers.size };
+/** Match TTL records by ledger key hash, never by RPC response position. */
+function isTtlKey(key: StellarSdk.xdr.LedgerKey): boolean {
+  return (
+    key.type === "contractCode" ||
+    (key.type === "contractData" &&
+      key.contractData.durability.name === "persistent")
+  );
 }
 
-/**
- * Check if a contract exists on the network by looking up its account ledger entry.
- */
-async function _checkContractExists(
-  server: StellarSdk.rpc.Server,
-  contractIdString: string,
-): Promise<boolean> {
-  const now = Date.now();
-  const cached = contractExistenceCache.get(contractIdString);
-  if (cached && now - cached.timestamp < CACHE_TTL.CONTRACT_EXISTENCE_MS) {
-    // Record cache hit
-    metrics.recordCacheHit("contract_existence");
-    return cached.exists;
-  }
-
-  // Record cache miss
-  metrics.recordCacheMiss("contract_existence");
-
-  try {
-    const accountId =
-      StellarSdk.StrKey.decodeEd25519PublicKey(contractIdString);
-    const ledgerKey = StellarSdk.xdr.LedgerKey.account(
-      new StellarSdk.xdr.LedgerKeyAccount({
-        accountId: StellarSdk.xdr.PublicKey.publicKeyTypeEd25519(accountId),
-      }),
-    );
-    const response = await rpcCircuitBreaker.call(() =>
-      server.getLedgerEntries(ledgerKey),
-    );
-    const exists = response.entries && response.entries.length > 0;
-    contractExistenceCache.set(contractIdString, { exists, timestamp: now });
-    return exists;
-  } catch {
-    // Record RPC error
-    metrics.recordRpcError("unknown", "get_ledger_entries_failure");
-
-    // If there's an error (e.g., network, invalid ID), assume contract does not exist
-    contractExistenceCache.set(contractIdString, {
-      exists: false,
-      timestamp: now,
-    });
-    return false;
-  }
-}
-
-/**
- * Fetch TTL information for footprint entries via RPC
- */
 async function fetchTtlInfo(
   server: StellarSdk.rpc.Server,
   footprintEntries: string[],
-  _network: Network,
+  response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
 ): Promise<Record<string, TtlInfo>> {
-  if (footprintEntries.length === 0) {
-    return {};
+  const keys = [...new Set(footprintEntries)].map((value) =>
+    StellarSdk.xdr.LedgerKey.fromXDR(value, "base64"),
+  );
+  const touched = new Set(footprintEntries);
+  const ttlMap: Record<string, TtlInfo> = {};
+  const byHash = new Map(
+    keys
+      .filter(isTtlKey)
+      .map((key) => [
+        Buffer.from(StellarSdk.hash(key.toXDR())).toString("hex"),
+        key.toXDR("base64"),
+      ]),
+  );
+  const record = (key: string, liveUntilLedger: number) => {
+    const expiresInLedgers = liveUntilLedger - response.latestLedger;
+    ttlMap[key] = {
+      liveUntilLedger,
+      expiresInLedgers,
+      requiresExtension: expiresInLedgers < TTL_EXTENSION_SAFETY_LEDGERS,
+      requiresRestore: expiresInLedgers < 0,
+    };
+  };
+  for (const change of response.stateChanges ?? []) {
+    const data = (change.before ?? change.after)?.data;
+    if (data?.type === "ttl") {
+      const ttl = data.ttl;
+      const key = byHash.get(ttl.keyHash.toString());
+      if (key) record(key, ttl.liveUntilLedgerSeq);
+    }
   }
-
+  const missing = keys.filter(
+    (key) => isTtlKey(key) && !ttlMap[key.toXDR("base64")],
+  );
   try {
-    const ledgerKeys = footprintEntries.map((xdr) => {
-      return StellarSdk.xdr.LedgerKey.fromXDR(xdr, "base64");
-    });
-
-    const response = await rpcCircuitBreaker.call(() =>
-      server.getLedgerEntries(...ledgerKeys),
-    );
-
-    const ttlMap: Record<string, TtlInfo> = {};
-    const currentLedger = response.latestLedger ?? 0;
-
-    if (response.entries) {
-      for (let i = 0; i < response.entries.length; i++) {
-        const entry = response.entries[i];
-        const xdr = footprintEntries[i];
-
-        if (entry.liveUntilLedgerSeq) {
-          const liveUntilLedger = Number(entry.liveUntilLedgerSeq);
-          const expiresInLedgers = liveUntilLedger - currentLedger;
-
-          ttlMap[xdr] = {
-            liveUntilLedger,
-            expiresInLedgers,
-          };
-        }
+    for (let offset = 0; offset < missing.length; offset += 200) {
+      const lookup = await rpcCircuitBreaker.call(() =>
+        server.getLedgerEntries(...missing.slice(offset, offset + 200)),
+      );
+      for (const entry of lookup.entries) {
+        const key = entry.key.toXDR("base64");
+        if (touched.has(key) && entry.liveUntilLedgerSeq !== undefined)
+          record(key, entry.liveUntilLedgerSeq);
       }
     }
-
-    return ttlMap;
   } catch {
-    // Record RPC error
     metrics.recordRpcError("unknown", "fetch_ttl_failure");
-    // If TTL fetching fails, return empty map
-    return {};
   }
+  if (StellarSdk.rpc.Api.isSimulationRestore(response)) {
+    const restored =
+      response.restorePreamble.transactionData.build().resources.footprint;
+    for (const key of [...restored.readOnly, ...restored.readWrite]) {
+      const value = key.toXDR("base64");
+      if (isTtlKey(key) && touched.has(value)) {
+        ttlMap[value] = {
+          ...(ttlMap[value] ?? {
+            liveUntilLedger: null,
+            expiresInLedgers: null,
+          }),
+          requiresRestore: true,
+          requiresExtension: true,
+        };
+      }
+    }
+  }
+  for (const key of keys.filter(isTtlKey)) {
+    const encoded = key.toXDR("base64");
+    ttlMap[encoded] ??= { liveUntilLedger: null, expiresInLedgers: null };
+  }
+  return ttlMap;
 }
 
-/**
- * Build warnings for footprint entries expiring within 100 ledgers
- */
 function buildTtlWarnings(ttl: Record<string, TtlInfo>): string[] {
   return Object.entries(ttl)
-    .filter(([, info]) => info.expiresInLedgers < 100)
-    .map(
-      ([xdr, info]) =>
-        `Footprint entry ${xdr.slice(0, 16)}… expires in ${info.expiresInLedgers} ledgers; restoration may be required soon.`,
+    .filter(
+      ([, info]) =>
+        info.requiresRestore ||
+        (info.expiresInLedgers !== null &&
+          info.expiresInLedgers < TTL_WARNING_THRESHOLD_LEDGERS),
+    )
+    .map(([key, info]) =>
+      info.requiresRestore
+        ? `Footprint entry ${key} is archived; restore it before extending its TTL.`
+        : `Footprint entry ${key} expires in ${info.expiresInLedgers} ledgers; extend its TTL to at least ${TTL_WARNING_THRESHOLD_LEDGERS} ledgers.`,
     );
+}
+
+function recommendTtlExtension(
+  ttl: Record<string, TtlInfo>,
+): TtlExtensionRecommendation | undefined {
+  const entries = Object.keys(ttl).filter(
+    (key) =>
+      ttl[key].requiresRestore ||
+      (ttl[key].expiresInLedgers !== null &&
+        ttl[key].expiresInLedgers < TTL_WARNING_THRESHOLD_LEDGERS),
+  );
+  if (!entries.length) return undefined;
+  return {
+    extendTo: Math.max(
+      TTL_WARNING_THRESHOLD_LEDGERS,
+      TTL_EXTENSION_SAFETY_LEDGERS,
+    ),
+    entries,
+    restoreFirst: entries.some((key) => ttl[key].requiresRestore),
+  };
 }
 
 function buildLedgerSequenceWarning(
@@ -204,74 +197,6 @@ function calculateFootprintStats(
 }
 
 /**
- * Extract contract invocation details from transaction
- */
-function _extractInvocation(
-  tx: StellarSdk.Transaction<
-    StellarSdk.Memo<StellarSdk.MemoType>,
-    StellarSdk.Operation[]
-  >,
-): ContractInvocation | undefined {
-  try {
-    const op = tx.operations[0];
-    if (!op || op.type !== "invokeHostFunction") {
-      return undefined;
-    }
-
-    // Basic extraction - can be improved to parse xdr.HostFunction
-    return {
-      contractId: "",
-      functionName: "",
-      args: [],
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Extract authorization entries from simulation response
- */
-function _extractAuthEntries(
-  auth: StellarSdk.xdr.SorobanAuthorizationEntry[],
-): AuthEntry[] {
-  return auth.map((entry) => {
-    return {
-      contractId: "",
-      functionName: "",
-      xdr: entry.toXDR("base64"),
-    };
-  });
-}
-
-/**
- * Extract contract events from simulation response
- */
-function _extractEvents(
-  response: StellarSdk.rpc.Api.SimulateTransactionResponse,
-): ContractEvent[] {
-  const events =
-    (response.events as unknown as StellarSdk.xdr.DiagnosticEvent[]) ?? [];
-
-  return events.map((event: unknown) => {
-    const e = event as {
-      type?: () => { name?: string };
-      contractId?: () => Buffer;
-    };
-    return {
-      type: e.type?.()?.name || "unknown",
-      contractId: e.contractId?.()?.toString("hex") || "",
-      topics: [],
-      data: "",
-    };
-  });
-}
-
-/**
- * Extract required signers from auth entries.
- */
-
-/**
  * Result of a transaction simulation
  */
 export interface SimulateResult {
@@ -285,6 +210,7 @@ export interface SimulateResult {
   contracts?: string[];
   contractType?: ContractType;
   ttl?: Record<string, TtlInfo>;
+  ttlWarnings?: string[];
   optimized?: boolean;
   rawFootprint?: {
     readOnly: string[];
@@ -297,6 +223,7 @@ export interface SimulateResult {
   cost?: {
     cpuInsns: string;
     memBytes: string;
+    ttlExtension?: TtlExtensionRecommendation;
   };
   resourceFee?: string;
   error?: string;
@@ -305,6 +232,7 @@ export interface SimulateResult {
   raw?: StellarSdk.rpc.Api.SimulateTransactionResponse;
   requiredSigners?: string[];
   threshold?: number;
+  signerThresholdReports?: SignerThresholdReport[];
   operations?: SimulateResult[];
   feeBump?: boolean;
   diagnosticEvents?: string[];
@@ -318,14 +246,15 @@ export interface SimulateResult {
  */
 async function _processSimulationResult(
   server: StellarSdk.rpc.Server,
-  network: Network,
   transactionData: StellarSdk.xdr.SorobanTransactionData,
-  cost?: { cpuInsns: string; memBytes: string },
+  cost: { cpuInsns: string; memBytes: string } | undefined,
+  response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
+  tx: StellarSdk.Transaction,
 ): Promise<Partial<SimulateResult>> {
-  const footprintXdr = transactionData.resources().footprint();
+  const footprintXdr = transactionData.resources.footprint;
   const rawFootprint = {
-    readOnly: footprintXdr.readOnly().map((e) => e.toXDR("base64")),
-    readWrite: footprintXdr.readWrite().map((e) => e.toXDR("base64")),
+    readOnly: footprintXdr.readOnly.map((e) => e.toXDR("base64")),
+    readWrite: footprintXdr.readWrite.map((e) => e.toXDR("base64")),
   };
 
   const parsed = parseFootprint(rawFootprint);
@@ -337,20 +266,25 @@ async function _processSimulationResult(
   const allXdrEntries = [...rawFootprint.readOnly, ...rawFootprint.readWrite];
   const contracts = extractContracts(allXdrEntries);
 
-  const [ttl, contractType] = await Promise.all([
-    fetchTtlInfo(server, allXdrEntries, network),
+  const [ttl, contractType, accounts] = await Promise.all([
+    fetchTtlInfo(server, allXdrEntries, response),
     contracts.length > 0
       ? detectTokenContract(contracts[0], server)
       : Promise.resolve<ContractType>("unknown"),
+    fetchTouchedAccounts(server, allXdrEntries, response),
   ]);
 
-  // SorobanTransactionData.build() returns xdr.SorobanTransactionData which
-  // exposes auth() at the XDR level; use unknown cast to avoid any.
-  const builtData = transactionData as unknown as {
-    auth?: () => StellarSdk.xdr.SorobanAuthorizationEntry[];
-  };
-  const auth = builtData.auth?.() ?? [];
-  const { requiredSigners, threshold } = extractRequiredSigners(auth);
+  const auth = simulationAuth(response, tx);
+  const authorization = extractRequiredSigners(auth, invocationSource(tx));
+  const signerThresholdReports = buildThresholdReports(auth, tx, accounts);
+  const invocationOp = tx.operations.find(
+    (op) => op.type === "invokeHostFunction",
+  );
+  const invocation =
+    invocationOp?.type === "invokeHostFunction" &&
+    invocationOp.func.type === "hostFunctionTypeInvokeContract"
+      ? describeInvocation(invocationOp.func.invokeContract)
+      : undefined;
 
   const footprintStats = calculateFootprintStats(
     rawFootprint.readOnly,
@@ -360,8 +294,14 @@ async function _processSimulationResult(
   return {
     success: true,
     footprint: {
-      readOnly: optimizationResult.readOnly,
-      readWrite: optimizationResult.readWrite,
+      readOnly: optimizationResult.readOnly.map((entry) => ({
+        ...entry,
+        ttlInfo: ttl[entry.xdr],
+      })),
+      readWrite: optimizationResult.readWrite.map((entry) => ({
+        ...entry,
+        ttlInfo: ttl[entry.xdr],
+      })),
     },
     contracts,
     contractType,
@@ -373,8 +313,9 @@ async function _processSimulationResult(
       cpuInsns: cost?.cpuInsns ?? "0",
       memBytes: cost?.memBytes ?? "0",
     },
-    requiredSigners,
-    threshold,
+    ...authorization,
+    signerThresholdReports,
+    invocation,
   };
 }
 
@@ -418,8 +359,7 @@ export async function simulateTransaction(
   // Upgrade v0 envelopes to v1 before simulation
   if (
     !(tx instanceof StellarSdk.FeeBumpTransaction) &&
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (tx as any).envelopeType?.().name === "envelopeTypeTxV0"
+    tx.toEnvelope().type === "envelopeTypeTxV0"
   ) {
     tx = StellarSdk.TransactionBuilder.cloneFrom(
       tx as StellarSdk.Transaction,
@@ -497,20 +437,39 @@ export async function simulateTransaction(
   }
 
   if (StellarSdk.rpc.Api.isSimulationRestore(response)) {
+    const data = response.transactionData.build().resources.footprint;
+    const restoreData =
+      response.restorePreamble.transactionData.build().resources.footprint;
+    const keys = [
+      ...data.readOnly,
+      ...data.readWrite,
+      ...restoreData.readOnly,
+      ...restoreData.readWrite,
+    ];
+    const ttl = await fetchTtlInfo(
+      server,
+      [...new Set(keys.map((key) => key.toXDR("base64")))],
+      response,
+    );
+    const ttlWarnings = buildTtlWarnings(ttl);
     return {
       success: false,
-      type: "restoration_required" as const,
+      type: "restoration_required",
       error: "Transaction requires ledger entry restoration before simulation.",
       code: ErrorCode.SIMULATION_RESTORE_REQUIRED,
+      ttl,
+      ttlWarnings,
+      warnings: ttlWarnings,
+      cost: {
+        cpuInsns: "0",
+        memBytes: "0",
+        ttlExtension: recommendTtlExtension(ttl),
+      },
       raw: response,
     };
   }
 
-  const results = response.transactionData
-    ? [{ transactionData: response.transactionData }]
-    : [];
-
-  if (results.length === 0) {
+  if (!response.transactionData) {
     return {
       success: false,
       error:
@@ -519,219 +478,446 @@ export async function simulateTransaction(
       raw: response,
     };
   }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const responseCost = (response as any).cost;
-  const diagnosticEvents =
-    response.events
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ?.filter((e) => (e as any).type?.()?.name === "diagnostic")
-      .map((e) => e.toXDR("base64")) || [];
-
-  let finalResult: SimulateResult;
-
-  if (results.length === 1) {
-    // Single operation — delegate to shared helper
-    const result = results[0];
-    if (!result.transactionData) {
-      return {
-        success: false,
-        error:
-          "Simulation succeeded but transactionData is missing; cannot extract footprint.",
-        code: ErrorCode.SIMULATION_DATA_MISSING,
-        raw: response,
-      };
+  const responseCost = (
+    response as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse & {
+      cost?: { cpuInsns: string; memBytes: string };
     }
+  ).cost;
+  const processed = await _processSimulationResult(
+    server,
+    response.transactionData.build(),
+    responseCost,
+    response,
+    tx,
+  );
+  const ttl = processed.ttl ?? {};
+  const ttlWarnings = buildTtlWarnings(ttl);
+  const ledgerWarning = buildLedgerSequenceWarning(
+    ledgerSequence,
+    response.latestLedger,
+  );
+  const ttlExtension = recommendTtlExtension(ttl);
+  const result: SimulateResult = {
+    ...processed,
+    success: true,
+    cost: {
+      cpuInsns: responseCost?.cpuInsns ?? "0",
+      memBytes: responseCost?.memBytes ?? "0",
+      ...(ttlExtension ? { ttlExtension } : {}),
+    },
+    ttlWarnings,
+    warnings: [...ttlWarnings, ...(ledgerWarning ? [ledgerWarning] : [])],
+    raw: response,
+    upgradedFromV0: upgradedFromV0 || undefined,
+    diagnosticEvents: (response.events ?? []).map((event) =>
+      event.toXDR("base64"),
+    ),
+  };
+  return result;
+}
 
-    const processed = await _processSimulationResult(
-      server,
-      network,
-      result.transactionData.build(),
-      responseCost,
+/** ScVal maps retain their key types and wide integers never pass through Number. */
+function formatScVal(value: StellarSdk.xdr.ScVal): string {
+  switch (value.type) {
+    case "scvVec":
+      return `[${(value.vec ?? []).map(formatScVal).join(", ")}]`;
+    case "scvMap":
+      return `{${(value.map ?? []).map((entry) => `${formatScVal(entry.key)}: ${formatScVal(entry.val)}`).join(", ")}}`;
+    case "scvAddress":
+      return StellarSdk.Address.fromScAddress(value.address).toString();
+    case "scvSymbol":
+      return value.sym.toString();
+    case "scvString":
+      return JSON.stringify(value.str.toString());
+    case "scvBytes":
+      return `0x${Buffer.from(value.bytes.toBytes()).toString("hex")}`;
+    default: {
+      try {
+        const native: unknown = StellarSdk.scValToNative(value);
+        return typeof native === "bigint"
+          ? native.toString()
+          : JSON.stringify(native);
+      } catch {
+        return value.toXDR("base64");
+      }
+    }
+  }
+}
+
+function describeInvocation(
+  args: StellarSdk.xdr.InvokeContractArgs,
+): ContractInvocation {
+  const functionName = args.functionName.toString();
+  const types = args.args.map((arg) => arg.type);
+  const tokenSignatures: Record<string, string[]> = {
+    transfer: ["scvAddress", "scvAddress", "scvI128"],
+    balance: ["scvAddress"],
+    approve: ["scvAddress", "scvAddress", "scvI128", "scvU32"],
+    transfer_from: ["scvAddress", "scvAddress", "scvAddress", "scvI128"],
+    allowance: ["scvAddress", "scvAddress"],
+    burn: ["scvAddress", "scvI128"],
+    burn_from: ["scvAddress", "scvAddress", "scvI128"],
+  };
+  const oracleSignatures: Record<string, string[]> = {
+    lastprice: ["scvVec"],
+    price: ["scvVec", "scvU64"],
+    prices: ["scvVec", "scvU32"],
+    resolution: [],
+    base: [],
+    assets: [],
+  };
+  const matches = (signature: string[] | undefined) =>
+    signature !== undefined &&
+    signature.length === types.length &&
+    signature.every((type, index) => types[index] === type);
+  const name = matches(tokenSignatures[functionName])
+    ? "SEP-41"
+    : matches(oracleSignatures[functionName])
+      ? "SEP-40"
+      : ["propose", "vote", "execute", "cancel", "queue"].includes(functionName)
+        ? "DAO governance"
+        : "unknown";
+  return {
+    contractId: StellarSdk.Address.fromScAddress(
+      args.contractAddress,
+    ).toString(),
+    functionName,
+    args: args.args.map(formatScVal),
+    argTypes: types,
+    interfaceEstimation: { name, basis: "function name and argument types" },
+  };
+}
+
+/** Static analysis reads only the envelope; RPC configuration is not needed. */
+export function simulateDryRun(
+  xdr: string,
+  network: Network = "testnet",
+): DryRunResult {
+  const passphrases = {
+    testnet: StellarSdk.Networks.TESTNET,
+    mainnet: StellarSdk.Networks.PUBLIC,
+    futurenet: StellarSdk.Networks.FUTURENET,
+  };
+  const transaction = StellarSdk.TransactionBuilder.fromXDR(
+    xdr,
+    passphrases[network],
+  );
+  const inner =
+    transaction instanceof StellarSdk.FeeBumpTransaction
+      ? transaction.innerTransaction
+      : transaction;
+  const operations = inner.operations.map((op) => {
+    const basic = { type: op.type, source: op.source ?? null };
+    if (op.type !== "invokeHostFunction") return basic;
+    const invocation =
+      op.func.type === "hostFunctionTypeInvokeContract"
+        ? describeInvocation(op.func.invokeContract)
+        : undefined;
+    const authorization = extractRequiredSigners(
+      op.auth ?? [],
+      op.source ?? inner.source,
     );
-
-    const ledgerWarning = buildLedgerSequenceWarning(
-      ledgerSequence,
-      response.latestLedger,
-    );
-
     return {
-      success: true,
-      footprint: {
-        readOnly: processed.footprint?.readOnly ?? [],
-        readWrite: processed.footprint?.readWrite ?? [],
-      },
-      contracts: processed.contracts,
-      contractType: processed.contractType,
-      ttl: processed.ttl,
-      optimized: processed.optimized,
-      rawFootprint: processed.rawFootprint,
-      footprintStats: processed.footprintStats,
-      cost: {
-        cpuInsns: responseCost?.cpuInsns ?? "0",
-        memBytes: responseCost?.memBytes ?? "0",
-      },
-      warnings: [
-        ...buildTtlWarnings(processed.ttl ?? {}),
-        ...(ledgerWarning ? [ledgerWarning] : []),
-      ],
-      requiredSigners: processed.requiredSigners,
-      threshold: processed.threshold,
-      raw: response,
-      upgradedFromV0: upgradedFromV0 || undefined,
-      diagnosticEvents,
+      ...basic,
+      invocation,
+      authEntries: authorization.authEntries,
+      requiredSigners: authorization.requiredSigners,
     };
-  } else {
-    // Multi operation — call helper per result and merge
-    const operations: SimulateResult[] = [];
-    let allReadOnly: FootprintEntry[] = [];
-    let allReadWrite: FootprintEntry[] = [];
-    let allContracts: string[] = [];
-    const allTtl: Record<string, TtlInfo> = {};
-    let contractType: ContractType = "unknown";
-    let optimized = false;
-    let allRawReadOnly: string[] = [];
-    let allRawReadWrite: string[] = [];
-    let totalCpuInsns = BigInt(0);
-    let totalMemBytes = BigInt(0);
+  });
+  return {
+    dryRun: true,
+    network,
+    sourceAccount: inner.source,
+    sequence: inner.sequence,
+    operationCount: operations.length,
+    operations,
+  };
+}
 
-    for (const result of results) {
-      if (!result.transactionData) {
-        return {
-          success: false,
-          error:
-            "Simulation succeeded but transactionData is missing for one operation; cannot extract footprint.",
-          code: ErrorCode.SIMULATION_DATA_MISSING,
-          raw: response,
-        };
-      }
+const ADMIN_FUNCTIONS = new Set([
+  "set_admin",
+  "set_authority",
+  "set_thresholds",
+  "upgrade",
+  "mint",
+  "clawback",
+]);
 
-      const processed = await _processSimulationResult(
-        server,
-        network,
-        result.transactionData.build(),
-      );
+function describeAuthTree(
+  node: StellarSdk.xdr.SorobanAuthorizedInvocation,
+): AuthorizationInvocation {
+  const fn = node.function;
+  const invocation =
+    fn.type === "sorobanAuthorizedFunctionTypeContractFn"
+      ? describeInvocation(fn.contractFn)
+      : undefined;
+  const subInvocations = node.subInvocations.map(describeAuthTree);
+  const authorizationLevel =
+    !invocation ||
+    ADMIN_FUNCTIONS.has(invocation.functionName) ||
+    subInvocations.some((child) => child.authorizationLevel === "admin")
+      ? "admin"
+      : "payment";
+  return { type: fn.type, invocation, authorizationLevel, subInvocations };
+}
 
-      const allXdrEntries = [
-        ...(processed.rawFootprint?.readOnly ?? []),
-        ...(processed.rawFootprint?.readWrite ?? []),
-      ];
+function addressCredentials(
+  credentials: StellarSdk.xdr.SorobanCredentials,
+): StellarSdk.xdr.SorobanAddressCredentials | undefined {
+  switch (credentials.type) {
+    case "sorobanCredentialsAddress":
+      return credentials.address;
+    case "sorobanCredentialsAddressV2":
+      return credentials.addressV2;
+    case "sorobanCredentialsAddressWithDelegates":
+      return credentials.addressWithDelegates.addressCredentials;
+    default:
+      return undefined;
+  }
+}
 
-      const ttl = await fetchTtlInfo(server, allXdrEntries, network);
+function authorizer(
+  entry: StellarSdk.xdr.SorobanAuthorizationEntry,
+  source: string,
+): string {
+  const credentials = addressCredentials(entry.credentials);
+  return credentials
+    ? StellarSdk.Address.fromScAddress(credentials.address).toString()
+    : source;
+}
 
-      const builtOpData = result.transactionData?.build() as unknown as {
-        auth?: () => StellarSdk.xdr.SorobanAuthorizationEntry[];
+function extractRequiredSigners(
+  auth: StellarSdk.xdr.SorobanAuthorizationEntry[],
+  source: string,
+): {
+  requiredSigners: string[];
+  threshold: number;
+  authEntries: AuthEntry[];
+} {
+  const requiredSigners = new Set<string>();
+  const authEntries: AuthEntry[] = [];
+  const seen = new Set<string>();
+  for (const entry of auth) {
+    const encoded = entry.toXDR("base64");
+    if (seen.has(encoded)) continue;
+    seen.add(encoded);
+    const address = authorizer(entry, source);
+    requiredSigners.add(address);
+    // Credentials authorize the entire tree. Addresses in arguments are values,
+    // not additional signers (a transfer recipient need not authorize it).
+    const invocationTree = describeAuthTree(entry.rootInvocation);
+    authEntries.push({
+      contractId: invocationTree.invocation?.contractId ?? "",
+      functionName: invocationTree.invocation?.functionName ?? "",
+      xdr: encoded,
+      authorizer: address,
+      credentialsType: entry.credentials.type,
+      invocationTree,
+    });
+    if (entry.credentials.type === "sorobanCredentialsAddressWithDelegates") {
+      const visit = (delegates: StellarSdk.xdr.SorobanDelegateSignature[]) => {
+        for (const delegate of delegates) {
+          requiredSigners.add(
+            StellarSdk.Address.fromScAddress(delegate.address).toString(),
+          );
+          visit(delegate.nestedDelegates);
+        }
       };
-      const auth = builtOpData?.auth?.() ?? [];
-      const { requiredSigners, threshold } = extractRequiredSigners(auth);
-
-      const opContracts = processed.contracts ?? [];
-      const opContractType =
-        opContracts.length > 0
-          ? await detectTokenContract(opContracts[0], server)
-          : "unknown";
-
-      if (contractType === "unknown") contractType = opContractType;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const opCpuInsns = (result as any).cost?.cpuInsns ?? "0";
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const opMemBytes = (result as any).cost?.memBytes ?? "0";
-      totalCpuInsns += BigInt(opCpuInsns);
-      totalMemBytes += BigInt(opMemBytes);
-
-      const opResult: SimulateResult = {
-        success: true,
-        footprint: {
-          readOnly: processed.footprint?.readOnly ?? [],
-          readWrite: processed.footprint?.readWrite ?? [],
-        },
-        contracts: opContracts,
-        contractType: opContractType,
-        ttl,
-        optimized: processed.optimized,
-        rawFootprint: processed.rawFootprint,
-        footprintStats: processed.footprintStats,
-        cost: {
-          cpuInsns: opCpuInsns,
-          memBytes: opMemBytes,
-        },
-        warnings: buildTtlWarnings(ttl),
-        requiredSigners,
-        threshold,
-      };
-
-      operations.push(opResult);
-
-      allReadOnly = [...allReadOnly, ...(processed.footprint?.readOnly ?? [])];
-      allReadWrite = [
-        ...allReadWrite,
-        ...(processed.footprint?.readWrite ?? []),
-      ];
-      allContracts = [...allContracts, ...(processed.contracts ?? [])];
-      Object.assign(allTtl, processed.ttl ?? {});
-      if (processed.optimized) optimized = true;
-      if (contractType === "unknown" && processed.contractType !== "unknown") {
-        contractType = processed.contractType as ContractType;
-      }
-      allRawReadOnly = [
-        ...allRawReadOnly,
-        ...(processed.rawFootprint?.readOnly ?? []),
-      ];
-      allRawReadWrite = [
-        ...allRawReadWrite,
-        ...(processed.rawFootprint?.readWrite ?? []),
-      ];
+      visit(entry.credentials.addressWithDelegates.delegates);
     }
-
-    // Dedup
-    const dedupReadOnly = allReadOnly.filter(
-      (item, index, arr) => arr.findIndex((i) => i.xdr === item.xdr) === index,
-    );
-    const dedupReadWrite = allReadWrite.filter(
-      (item, index, arr) => arr.findIndex((i) => i.xdr === item.xdr) === index,
-    );
-    const dedupRawReadOnly = allRawReadOnly.filter(
-      (item, index, arr) => arr.indexOf(item) === index,
-    );
-    const dedupRawReadWrite = allRawReadWrite.filter(
-      (item, index, arr) => arr.indexOf(item) === index,
-    );
-
-    const multiLedgerWarning = buildLedgerSequenceWarning(
-      ledgerSequence,
-      response.latestLedger,
-    );
-
-    finalResult = {
-      success: true,
-      footprint: { readOnly: dedupReadOnly, readWrite: dedupReadWrite },
-      contracts: [...new Set(allContracts)],
-      contractType,
-      ttl: allTtl,
-      optimized,
-      rawFootprint: {
-        readOnly: allRawReadOnly,
-        readWrite: allRawReadWrite,
-      },
-      footprintStats: calculateFootprintStats(allRawReadOnly, allRawReadWrite),
-      cost: {
-        cpuInsns: totalCpuInsns.toString(),
-        memBytes: totalMemBytes.toString(),
-      },
-      warnings: [
-        ...buildTtlWarnings(allTtl),
-        ...(multiLedgerWarning ? [multiLedgerWarning] : []),
-      ],
-      operations,
-      raw: response,
-      diagnosticEvents,
-    };
   }
+  return {
+    requiredSigners: [...requiredSigners],
+    threshold: requiredSigners.size,
+    authEntries,
+  };
+}
 
-  if (finalResult.success) {
-    await cache.set(cacheKey, finalResult, CACHE_TTL_MS);
+function invocationSource(tx: StellarSdk.Transaction): string {
+  return (
+    tx.operations.find((op) => op.type === "invokeHostFunction")?.source ??
+    tx.source
+  );
+}
+
+function simulationAuth(
+  response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
+  tx: StellarSdk.Transaction,
+): StellarSdk.xdr.SorobanAuthorizationEntry[] {
+  const existing = tx.operations.flatMap((op) =>
+    op.type === "invokeHostFunction" ? (op.auth ?? []) : [],
+  );
+  const source = invocationSource(tx);
+  const identity = (entry: StellarSdk.xdr.SorobanAuthorizationEntry) =>
+    `${authorizer(entry, source)}:${entry.rootInvocation.toXDR("base64")}`;
+  const fromEnvelope = new Map(
+    existing.map((entry) => [identity(entry), entry]),
+  );
+  // Prefer supplied signatures only when they authorize the same simulated tree.
+  return (response.result?.auth ?? existing).map(
+    (entry) => fromEnvelope.get(identity(entry)) ?? entry,
+  );
+}
+
+async function fetchTouchedAccounts(
+  server: StellarSdk.rpc.Server,
+  rawKeys: string[],
+  response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
+): Promise<Map<string, StellarSdk.xdr.AccountEntry>> {
+  const accounts = new Map<string, StellarSdk.xdr.AccountEntry>();
+  const put = (data: StellarSdk.xdr.LedgerEntryData) => {
+    if (data.type === "account")
+      accounts.set(
+        StellarSdk.StrKey.encodeEd25519PublicKey(
+          data.account.accountId.ed25519.toBytes(),
+        ),
+        data.account,
+      );
+  };
+  for (const change of response.stateChanges ?? []) {
+    // Threshold changes produced by simulation must not authorize that same call.
+    if (change.before) put(change.before.data);
   }
+  const keys = [...new Set(rawKeys)]
+    .map((key) => StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"))
+    .filter(
+      (key) =>
+        key.type === "account" &&
+        !accounts.has(
+          StellarSdk.StrKey.encodeEd25519PublicKey(
+            key.account.accountId.ed25519.toBytes(),
+          ),
+        ),
+    );
+  try {
+    for (let i = 0; i < keys.length; i += 200) {
+      const entries = await rpcCircuitBreaker.call(() =>
+        server.getLedgerEntries(...keys.slice(i, i + 200)),
+      );
+      for (const entry of entries.entries) put(entry.val);
+    }
+  } catch {
+    metrics.recordRpcError("unknown", "fetch_signer_weights_failure");
+  }
+  return accounts;
+}
 
-  return finalResult;
+/** Standard account signatures are vec<map<public_key: bytes, signature: bytes>>. */
+function suppliedSignatureKeys(signature: StellarSdk.xdr.ScVal): string[] {
+  if (signature.type !== "scvVec") return [];
+  const keys = new Set<string>();
+  for (const value of signature.vec ?? []) {
+    if (value.type !== "scvMap") continue;
+    const fields = new Map(
+      (value.map ?? []).flatMap((field) =>
+        field.key.type === "scvSymbol"
+          ? [[field.key.sym.toString(), field.val] as const]
+          : [],
+      ),
+    );
+    const key = fields.get("public_key");
+    const sig = fields.get("signature");
+    if (
+      key?.type === "scvBytes" &&
+      key.bytes.toBytes().length === 32 &&
+      sig?.type === "scvBytes" &&
+      sig.bytes.toBytes().length === 64
+    )
+      keys.add(StellarSdk.StrKey.encodeEd25519PublicKey(key.bytes.toBytes()));
+  }
+  return [...keys];
+}
+
+function buildThresholdReports(
+  auth: StellarSdk.xdr.SorobanAuthorizationEntry[],
+  tx: StellarSdk.Transaction,
+  accounts: Map<string, StellarSdk.xdr.AccountEntry>,
+): SignerThresholdReport[] {
+  const source = invocationSource(tx);
+  const reports: SignerThresholdReport[] = [];
+  const seen = new Set<string>();
+  const report = (
+    accountId: string,
+    authorizationLevel: AuthorizationLevel,
+    signature: StellarSdk.xdr.ScVal | undefined,
+    invocationXdr: string,
+  ) => {
+    const identity = `${accountId}:${invocationXdr}:${signature?.toXDR("base64") ?? "source"}`;
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    const account = accounts.get(accountId);
+    const weights = new Map<string, number>();
+    if (account) {
+      weights.set(accountId, account.thresholds.toBytes()[0]);
+      for (const signer of account.signers) {
+        if (signer.key.type === "signerKeyTypeEd25519")
+          weights.set(
+            StellarSdk.StrKey.encodeEd25519PublicKey(
+              signer.key.ed25519.toBytes(),
+            ),
+            signer.weight,
+          );
+      }
+    }
+    const keys = signature
+      ? suppliedSignatureKeys(signature)
+      : [...weights.keys()].filter((key) =>
+          tx.signatures.some((sig) =>
+            StellarSdk.Keypair.fromPublicKey(key).verify(
+              tx.hash(),
+              sig.signature.toBytes(),
+            ),
+          ),
+        );
+    const signers = keys.map((publicKey) => ({
+      publicKey,
+      weight: account ? (weights.get(publicKey) ?? 0) : null,
+    }));
+    const thresholdRequired = account
+      ? account.thresholds.toBytes()[authorizationLevel === "admin" ? 3 : 2]
+      : null;
+    const totalWeight = account
+      ? Math.min(
+          255,
+          signers.reduce((sum, signer) => sum + (signer.weight ?? 0), 0),
+        )
+      : null;
+    reports.push({
+      accountId,
+      authorizationLevel,
+      signers,
+      thresholdRequired,
+      totalWeight,
+      isSufficient:
+        thresholdRequired !== null && totalWeight !== null
+          ? totalWeight >= thresholdRequired
+          : null,
+      invocationXdr,
+    });
+  };
+  for (const entry of auth) {
+    const tree = describeAuthTree(entry.rootInvocation);
+    const invocationXdr = entry.rootInvocation.toXDR("base64");
+    report(
+      authorizer(entry, source),
+      tree.authorizationLevel,
+      addressCredentials(entry.credentials)?.signature,
+      invocationXdr,
+    );
+    if (entry.credentials.type === "sorobanCredentialsAddressWithDelegates") {
+      const visit = (delegates: StellarSdk.xdr.SorobanDelegateSignature[]) => {
+        for (const delegate of delegates) {
+          report(
+            StellarSdk.Address.fromScAddress(delegate.address).toString(),
+            tree.authorizationLevel,
+            delegate.signature,
+            invocationXdr,
+          );
+          visit(delegate.nestedDelegates);
+        }
+      };
+      visit(entry.credentials.addressWithDelegates.delegates);
+    }
+  }
+  return reports;
 }

@@ -956,6 +956,16 @@ components:
               source:
                 type: string
                 nullable: true
+              invocation:
+                $ref: "#/components/schemas/ContractInvocation"
+              authEntries:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuthEntry"
+              requiredSigners:
+                type: array
+                items:
+                  type: string
 
     SimulateHistoryResponse:
       type: object
@@ -1046,6 +1056,46 @@ components:
         network:
           $ref: "#/components/schemas/Network"
 
+    FootprintEntry:
+      type: object
+      required: [xdr, type]
+      properties:
+        xdr:
+          type: string
+        type:
+          type: string
+          enum:
+            [
+              ContractData,
+              ContractCode,
+              Account,
+              TrustLine,
+              Offer,
+              Data,
+              ClaimableBalance,
+              LiquidityPool,
+              ConfigSetting,
+              Ttl,
+              Unknown,
+            ]
+        contractId:
+          type: string
+        ttlInfo:
+          $ref: "#/components/schemas/TtlInfo"
+
+    ParsedFootprint:
+      type: object
+      required: [readOnly, readWrite]
+      properties:
+        readOnly:
+          type: array
+          items:
+            $ref: "#/components/schemas/FootprintEntry"
+        readWrite:
+          type: array
+          items:
+            $ref: "#/components/schemas/FootprintEntry"
+
     Footprint:
       type: object
       required: [readOnly, readWrite]
@@ -1061,6 +1111,123 @@ components:
             type: string
           description: Base64-encoded read-write ledger keys
 
+    TtlInfo:
+      type: object
+      required: [liveUntilLedger, expiresInLedgers]
+      properties:
+        liveUntilLedger:
+          type: integer
+          nullable: true
+        expiresInLedgers:
+          type: integer
+          nullable: true
+          description: TTL ledger minus simulation latestLedger; negative values indicate archival
+        requiresExtension:
+          type: boolean
+        requiresRestore:
+          type: boolean
+
+    TtlExtensionRecommendation:
+      type: object
+      required: [extendTo, entries, restoreFirst]
+      properties:
+        extendTo:
+          type: integer
+          description: Relative ledger count for ExtendFootprintTTLOp
+        entries:
+          type: array
+          items:
+            type: string
+        restoreFirst:
+          type: boolean
+
+    ContractInvocation:
+      type: object
+      required: [contractId, functionName, args]
+      properties:
+        contractId:
+          type: string
+        functionName:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        argTypes:
+          type: array
+          items:
+            type: string
+        interfaceEstimation:
+          type: object
+          properties:
+            name:
+              type: string
+              enum: [SEP-41, SEP-40, DAO governance, unknown]
+            basis:
+              type: string
+
+    AuthorizationInvocation:
+      type: object
+      properties:
+        type:
+          type: string
+        invocation:
+          $ref: "#/components/schemas/ContractInvocation"
+        authorizationLevel:
+          type: string
+          enum: [payment, admin]
+        subInvocations:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthorizationInvocation"
+
+    AuthEntry:
+      type: object
+      properties:
+        xdr:
+          type: string
+        contractId:
+          type: string
+        functionName:
+          type: string
+        authorizer:
+          type: string
+        credentialsType:
+          type: string
+        invocationTree:
+          $ref: "#/components/schemas/AuthorizationInvocation"
+
+    SignerThresholdReport:
+      type: object
+      description: Per authorization tree weight comparison; method names estimate medium/payment or high/admin requirements, without verifying address credential signatures
+      properties:
+        invocationXdr:
+          type: string
+        accountId:
+          type: string
+        authorizationLevel:
+          type: string
+          enum: [payment, admin]
+        thresholdRequired:
+          type: integer
+          nullable: true
+        totalWeight:
+          type: integer
+          nullable: true
+        isSufficient:
+          type: boolean
+          nullable: true
+        signers:
+          type: array
+          items:
+            type: object
+            properties:
+              publicKey:
+                type: string
+              weight:
+                type: integer
+                nullable: true
+
     ResourceCost:
       type: object
       required: [cpuInsns, memBytes]
@@ -1073,6 +1240,8 @@ components:
           type: string
           description: Memory bytes consumed (string to avoid precision loss)
           example: "8192"
+        ttlExtension:
+          $ref: "#/components/schemas/TtlExtensionRecommendation"
 
     SimulateSuccessResponse:
       type: object
@@ -1082,12 +1251,34 @@ components:
           type: boolean
           enum: [true]
         footprint:
-          $ref: "#/components/schemas/Footprint"
+          $ref: "#/components/schemas/ParsedFootprint"
         cost:
           $ref: "#/components/schemas/ResourceCost"
         cacheHit:
           type: boolean
           description: Whether the result was served from cache
+        ttl:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/TtlInfo"
+        ttlWarnings:
+          type: array
+          items:
+            type: string
+        invocation:
+          $ref: "#/components/schemas/ContractInvocation"
+        authEntries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthEntry"
+        requiredSigners:
+          type: array
+          items:
+            type: string
+        signerThresholdReports:
+          type: array
+          items:
+            $ref: "#/components/schemas/SignerThresholdReport"
 
     SimulateFailureResponse:
       type: object

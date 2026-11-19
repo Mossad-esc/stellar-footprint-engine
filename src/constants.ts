@@ -6,6 +6,26 @@ export const NETWORKS = {
 
 export const DEFAULT_NETWORK = NETWORKS.TESTNET;
 
+function positiveLedgerThreshold(
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 0xffff_ffff
+    ? parsed
+    : fallback;
+}
+
+/** Roughly fourteen days at five seconds per ledger. */
+export const TTL_WARNING_THRESHOLD_LEDGERS = positiveLedgerThreshold(
+  process.env.TTL_WARNING_THRESHOLD_LEDGERS,
+  240_000,
+);
+export const TTL_EXTENSION_SAFETY_LEDGERS = positiveLedgerThreshold(
+  process.env.TTL_EXTENSION_SAFETY_LEDGERS,
+  100_000,
+);
+
 export const RPC_URLS = {
   TESTNET: "https://soroban-testnet.stellar.org",
 } as const;
