@@ -1,20 +1,6 @@
 import { Network, getNetworkConfig, getRpcServer } from "@config/stellar";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import { calculateFootprintStats } from "./footprintExtractor";
-import {
-  parseFootprint,
-  parseContractInvocation,
-  hasContractCreationInstance,
-  extractContracts,
-  detectTokenContract,
-  mergeFootprints,
-  detectSacContracts,
-  calculateFootprintStats,
-  type FootprintEntry,
-  type ContractType,
-} from "./footprintParser";
-// import { calculateResourceFee } from "./feeEstimator"; // unused
 import {
   ErrorCode,
   TTL_WARNING_THRESHOLD_LEDGERS,
@@ -22,6 +8,7 @@ import {
 } from "../constants";
 import metrics from "../middleware/metrics";
 import { buildCacheKey, getCache } from "../services/cache";
+import { ContractType } from "../types";
 import {
   FootprintStats,
   AuthEntry,
@@ -33,10 +20,216 @@ import {
   AuthorizationInvocation,
   AuthorizationLevel,
   SignerThresholdReport,
+  DiagnosticEvent,
 } from "../types";
 import { rpcCircuitBreaker } from "../utils/circuitBreaker";
 import { withRetry } from "../utils/retry";
 import { sanitizeRpcError } from "../utils/rpcErrorSanitizer";
+import {
+  parseFootprint,
+  parseContractInvocation,
+  hasContractCreationInstance,
+  extractContracts,
+  detectTokenContract,
+  mergeFootprints,
+  detectSacContracts,
+  calculateFootprintStats,
+  type FootprintEntry,
+} from "./footprintParser";
+
+// ---------------------------------------------------------------------------
+// Soroban call stack depth — protocol ceiling is 10
+// ---------------------------------------------------------------------------
+
+const CALL_DEPTH_PROTOCOL_LIMIT = 10;
+const CALL_DEPTH_WARNING_THRESHOLD = CALL_DEPTH_PROTOCOL_LIMIT - 2; // ≥ 8
+
+/**
+ * Measure the maximum nesting depth of contract_call events by walking the
+ * invocation tree returned in the simulation result.  Falls back to scanning
+ * the flat diagnostic event list when no structured tree is available.
+ */
+export function measureCallDepth(
+  response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
+): number {
+  // Walk the structured invocation tree when it is available.
+  if (response.result?.retval !== undefined) {
+    const auth = response.result.auth ?? [];
+    if (auth.length > 0) {
+      const depthOfInvocation = (
+        node: StellarSdk.xdr.SorobanAuthorizedInvocation,
+        current: number,
+      ): number => {
+        if (node.subInvocations.length === 0) return current;
+        return Math.max(
+          ...node.subInvocations.map((child) =>
+            depthOfInvocation(child, current + 1),
+          ),
+        );
+      };
+      const maxFromAuth = Math.max(
+        1,
+        ...auth.map((entry) => depthOfInvocation(entry.rootInvocation, 1)),
+      );
+      if (maxFromAuth > 1) return maxFromAuth;
+    }
+  }
+
+  // Fallback: count call_stack / contract_call markers in diagnostic events.
+  const events = response.events ?? [];
+  if (events.length === 0) return 1;
+
+  let currentDepth = 0;
+  let maxDepth = 0;
+  for (const rawEvent of events) {
+    try {
+      const ev = rawEvent as unknown as {
+        inSuccessfulContractCall?: boolean;
+      };
+      if (ev.inSuccessfulContractCall) {
+        currentDepth++;
+        maxDepth = Math.max(maxDepth, currentDepth);
+      } else {
+        currentDepth = Math.max(0, currentDepth - 1);
+      }
+    } catch {
+      /* skip undecodable events */
+    }
+  }
+
+  return Math.max(1, maxDepth);
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic events parser (issue #20)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse raw XDR diagnostic events into structured DiagnosticEvent objects.
+ * Handles both base64 XDR strings and pre-parsed SDK objects.
+ */
+export function parseDiagnosticEvents(rawEvents: unknown[]): DiagnosticEvent[] {
+  return rawEvents.flatMap((raw) => {
+    const xdrBase64 =
+      typeof raw === "string"
+        ? raw
+        : (() => {
+            try {
+              return (raw as { toXDR: (enc: string) => string }).toXDR(
+                "base64",
+              );
+            } catch {
+              return null;
+            }
+          })();
+
+    if (!xdrBase64) return [];
+
+    try {
+      const diagEvent = StellarSdk.xdr.DiagnosticEvent.fromXDR(
+        xdrBase64,
+        "base64",
+      );
+      const contractEvent = diagEvent.event;
+      const topicVals = contractEvent.body.v0.topics;
+      const dataVal = contractEvent.body.v0.data;
+
+      // Determine topic name from the first topic symbol
+      let topic = "unknown";
+      if (topicVals.length > 0) {
+        const first = topicVals[0];
+        if (first.type === "scvSymbol") {
+          topic = first.sym.toString();
+        } else if (first.type === "scvString") {
+          topic = first.str.toString();
+        }
+      }
+
+      // Categorize log level
+      let logLevel: DiagnosticEvent["logLevel"] = "debug";
+      if (topic === "error" || topic.startsWith("HostError")) {
+        logLevel = "error";
+      } else if (topic === "warn" || topic === "warning") {
+        logLevel = "warn";
+      } else if (topic === "info" || topic === "log") {
+        logLevel = "info";
+      } else if (topic === "fn_call" || topic === "fn_return") {
+        logLevel = "debug";
+      }
+
+      // Decode data payload
+      let data: unknown = xdrBase64;
+      try {
+        data = StellarSdk.scValToNative(dataVal);
+      } catch {
+        try {
+          data = dataVal.toXDR("base64");
+        } catch {
+          data = null;
+        }
+      }
+
+      // Extract error code from HostError patterns in topics or data
+      let errorCode: number | string | undefined;
+      if (logLevel === "error") {
+        for (const topicVal of topicVals) {
+          try {
+            const native = StellarSdk.scValToNative(topicVal);
+            if (typeof native === "number" || typeof native === "bigint") {
+              errorCode = Number(native);
+              break;
+            }
+            if (typeof native === "string") {
+              const match = native.match(/#(\d+)/);
+              if (match) {
+                errorCode = parseInt(match[1], 10);
+                break;
+              }
+              if (native.includes("Error(")) {
+                errorCode = native;
+                break;
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        // Also check data for numeric error codes
+        if (errorCode === undefined) {
+          if (typeof data === "number") errorCode = data;
+          else if (typeof data === "bigint") errorCode = Number(data);
+          else if (typeof data === "string") {
+            const match = data.match(/#(\d+)/);
+            if (match) errorCode = parseInt(match[1], 10);
+          }
+        }
+      }
+
+      return [
+        {
+          logLevel,
+          topic,
+          data,
+          ...(errorCode !== undefined ? { errorCode } : {}),
+          xdr: xdrBase64,
+        },
+      ];
+    } catch {
+      return [
+        {
+          logLevel: "debug" as const,
+          topic: "unknown",
+          data: null,
+          xdr: xdrBase64,
+        },
+      ];
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// TTL helpers
+// ---------------------------------------------------------------------------
 
 /** Match TTL records by ledger key hash, never by RPC response position. */
 function isTtlKey(key: StellarSdk.xdr.LedgerKey): boolean {
@@ -172,9 +365,10 @@ function buildLedgerSequenceWarning(
   return undefined;
 }
 
-/**
- * Extract authorization entries from simulation response
- */
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
+
 function _extractAuthEntries(
   auth: StellarSdk.xdr.SorobanAuthorizationEntry[],
 ): AuthEntry[] {
@@ -187,9 +381,6 @@ function _extractAuthEntries(
   });
 }
 
-/**
- * Extract contract events from simulation response
- */
 function _extractEvents(
   response: StellarSdk.rpc.Api.SimulateTransactionResponse,
 ): ContractEvent[] {
@@ -210,13 +401,48 @@ function _extractEvents(
   });
 }
 
-/**
- * Extract required signers from auth entries.
- */
+// ---------------------------------------------------------------------------
+// Result types
+// ---------------------------------------------------------------------------
 
-/**
- * Result of a transaction simulation
- */
+export interface FootprintBreakdown {
+  contractCode: {
+    count: number;
+    estimatedSizeBytes: number;
+    readOnly: string[];
+    readWrite: string[];
+  };
+  contractInstance: {
+    count: number;
+    estimatedSizeBytes: number;
+    readOnly: string[];
+    readWrite: string[];
+  };
+  persistentData: {
+    count: number;
+    estimatedSizeBytes: number;
+    readOnly: string[];
+    readWrite: string[];
+  };
+  temporaryData: {
+    count: number;
+    estimatedSizeBytes: number;
+    readOnly: string[];
+    readWrite: string[];
+  };
+}
+
+export interface AssetInfo {
+  code: string;
+  issuer?: string;
+}
+
+export interface SacContract {
+  contractId: string;
+  isSAC: true;
+  assetInfo?: AssetInfo;
+}
+
 export interface SimulateResult {
   success: boolean;
   simulatedAt?: string;
@@ -258,21 +484,28 @@ export interface SimulateResult {
   operations?: SimulateResult[];
   feeBump?: boolean;
   diagnosticEvents?: string[];
+  /** Structured parsed diagnostic events (issue #20). */
+  parsedDiagnosticEvents?: DiagnosticEvent[];
   cacheHit?: boolean;
   type?: string;
   warnings?: string[];
+  /** Maximum cross-contract call stack depth measured from the simulation (issue #19). */
+  maxCallDepth?: number;
 }
 
-/**
- * Common processing for a single simulation result
- */
+// ---------------------------------------------------------------------------
+// Core simulation processing
+// ---------------------------------------------------------------------------
+
 async function _processSimulationResult(
   server: StellarSdk.rpc.Server,
+  network: Network,
   transactionData: StellarSdk.xdr.SorobanTransactionData,
   cost: { cpuInsns: string; memBytes: string } | undefined,
   response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
   tx: StellarSdk.Transaction,
 ): Promise<Partial<SimulateResult>> {
+  const { networkPassphrase } = getNetworkConfig(network);
   const footprintXdr = transactionData.resources.footprint;
   const rawFootprint = {
     readOnly: footprintXdr.readOnly.map((e) => e.toXDR("base64")),
@@ -280,7 +513,6 @@ async function _processSimulationResult(
   };
 
   const merged = mergeFootprints([rawFootprint]);
-  const { networkPassphrase } = getNetworkConfig(network);
   const initial = parseFootprint(merged, networkPassphrase);
   const sacContracts = await detectSacContracts(
     [...initial.readOnly, ...initial.readWrite],
@@ -320,11 +552,11 @@ async function _processSimulationResult(
   return {
     success: true,
     footprint: {
-      readOnly: optimizationResult.readOnly.map((entry) => ({
+      readOnly: parsed.readOnly.map((entry) => ({
         ...entry,
         ttlInfo: ttl[entry.xdr],
       })),
-      readWrite: optimizationResult.readWrite.map((entry) => ({
+      readWrite: parsed.readWrite.map((entry) => ({
         ...entry,
         ttlInfo: ttl[entry.xdr],
       })),
@@ -348,9 +580,10 @@ async function _processSimulationResult(
   };
 }
 
-/**
- * Simulate a Soroban transaction and extract its footprint
- */
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 export async function simulateTransaction(
   xdr: string,
   network: Network = "testnet",
@@ -368,9 +601,6 @@ export async function simulateTransaction(
   }
   metrics.recordCacheMiss("simulation");
 
-  // getNetworkConfig and getRpcServer are called inside the try block so that
-  // synchronous throws (e.g. missing RPC URL) are caught by the caller's
-  // error handler rather than propagating as unhandled rejections.
   let server: StellarSdk.rpc.Server;
   let networkPassphrase: string;
   let tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction;
@@ -409,7 +639,6 @@ export async function simulateTransaction(
     return result;
   }
 
-  // Reject classic (non-Soroban) transactions before hitting the RPC
   const hasSorobanOp = (tx as StellarSdk.Transaction).operations.some(
     (op) => op.type === "invokeHostFunction",
   );
@@ -438,7 +667,7 @@ export async function simulateTransaction(
     simOptions.ledger = ledgerSequence;
   }
 
-  let response;
+  let response: StellarSdk.rpc.Api.SimulateTransactionResponse;
   try {
     response = await withRetry(
       () =>
@@ -456,11 +685,23 @@ export async function simulateTransaction(
   }
 
   if (StellarSdk.rpc.Api.isSimulationError(response)) {
+    const rawDiagEvents = response.events ?? [];
+    const parsedDiagnosticEvents = parseDiagnosticEvents(rawDiagEvents);
     return {
       success: false,
       type: "simulation_error" as const,
       error: sanitizeRpcError(response.error),
       code: ErrorCode.RPC_SIMULATION_ERROR,
+      diagnosticEvents: rawDiagEvents.map((e) => {
+        try {
+          return (e as unknown as { toXDR: (enc: string) => string }).toXDR(
+            "base64",
+          );
+        } catch {
+          return String(e);
+        }
+      }),
+      parsedDiagnosticEvents,
       raw: response,
     };
   }
@@ -507,18 +748,22 @@ export async function simulateTransaction(
       raw: response,
     };
   }
+
   const responseCost = (
     response as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse & {
       cost?: { cpuInsns: string; memBytes: string };
     }
   ).cost;
+
   const processed = await _processSimulationResult(
     server,
+    network,
     response.transactionData.build(),
     responseCost,
     response,
-    tx,
+    tx as StellarSdk.Transaction,
   );
+
   const ttl = processed.ttl ?? {};
   const ttlWarnings = buildTtlWarnings(ttl);
   const ledgerWarning = buildLedgerSequenceWarning(
@@ -526,6 +771,48 @@ export async function simulateTransaction(
     response.latestLedger,
   );
   const ttlExtension = recommendTtlExtension(ttl);
+
+  // --- Issue #20: parse diagnostic events ---
+  const rawDiagEvents = response.events ?? [];
+  const parsedDiagnosticEvents = parseDiagnosticEvents(rawDiagEvents);
+
+  // --- Issue #19: measure call stack depth ---
+  const maxCallDepth = measureCallDepth(response);
+  const callDepthWarning =
+    maxCallDepth >= CALL_DEPTH_WARNING_THRESHOLD
+      ? `Call stack depth ${maxCallDepth} is within ${CALL_DEPTH_PROTOCOL_LIMIT - maxCallDepth} of the protocol limit (${CALL_DEPTH_PROTOCOL_LIMIT}). This transaction may fail under slightly different state conditions.`
+      : undefined;
+
+  const warnings = [
+    ...ttlWarnings,
+    ...(ledgerWarning ? [ledgerWarning] : []),
+    ...(callDepthWarning ? [callDepthWarning] : []),
+  ];
+
+  // --- Issue #21: check constructor simulation ---
+  const op = (tx as StellarSdk.Transaction).operations[0];
+  const { networkPassphrase: netPassphrase } = getNetworkConfig(network);
+  const invocationCheck =
+    op?.type === "invokeHostFunction" && op.func
+      ? parseContractInvocation(op.func, netPassphrase)
+      : undefined;
+  if (
+    invocationCheck?.isContractCreation &&
+    !hasContractCreationInstance(
+      invocationCheck,
+      processed.rawFootprint?.readWrite ?? [],
+    )
+  ) {
+    return {
+      success: false,
+      error:
+        "Contract creation simulation is missing the writable contract instance key.",
+      code: ErrorCode.SIMULATION_DATA_MISSING,
+      invocation: invocationCheck,
+      raw: response,
+    };
+  }
+
   const result: SimulateResult = {
     ...processed,
     success: true,
@@ -535,15 +822,65 @@ export async function simulateTransaction(
       ...(ttlExtension ? { ttlExtension } : {}),
     },
     ttlWarnings,
-    warnings: [...ttlWarnings, ...(ledgerWarning ? [ledgerWarning] : [])],
+    warnings,
     raw: response,
     upgradedFromV0: upgradedFromV0 || undefined,
-    diagnosticEvents: (response.events ?? []).map((event) =>
-      event.toXDR("base64"),
-    ),
+    diagnosticEvents: rawDiagEvents.map((e) => {
+      try {
+        return (e as unknown as { toXDR: (enc: string) => string }).toXDR(
+          "base64",
+        );
+      } catch {
+        return String(e);
+      }
+    }),
+    parsedDiagnosticEvents,
+    maxCallDepth,
   };
+
+  await cache.set(cacheKey, result, 60_000);
   return result;
 }
+
+export function simulateDryRun(
+  xdr: string,
+  network: Network = "testnet",
+): DryRunResult {
+  const { networkPassphrase } = getNetworkConfig(network);
+  const tx = StellarSdk.TransactionBuilder.fromXDR(xdr, networkPassphrase);
+  const inner =
+    tx instanceof StellarSdk.FeeBumpTransaction ? tx.innerTransaction : tx;
+  const operations = inner.operations.map((op) => {
+    const invocation =
+      op.type === "invokeHostFunction" && op.func
+        ? parseContractInvocation(op.func, networkPassphrase)
+        : undefined;
+    const auth = op.type === "invokeHostFunction" ? (op.auth ?? []) : [];
+    const { requiredSigners, authEntries } = extractRequiredSigners(
+      auth,
+      invocationSource(inner as StellarSdk.Transaction),
+    );
+    return {
+      type: op.type,
+      source: op.source ?? null,
+      invocation,
+      authEntries,
+      requiredSigners,
+    };
+  });
+  return {
+    dryRun: true,
+    network,
+    sourceAccount: inner.source,
+    sequence: inner.sequence,
+    operationCount: operations.length,
+    operations,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Invocation description helpers
+// ---------------------------------------------------------------------------
 
 /** ScVal maps retain their key types and wide integers never pass through Number. */
 function formatScVal(value: StellarSdk.xdr.ScVal): string {
@@ -559,7 +896,7 @@ function formatScVal(value: StellarSdk.xdr.ScVal): string {
     case "scvString":
       return JSON.stringify(value.str.toString());
     case "scvBytes":
-      return `0x${Buffer.from(value.bytes.toBytes()).toString("hex")}`;
+      return `0x${Buffer.from(value.bytes as unknown as Uint8Array).toString("hex")}`;
     default: {
       try {
         const native: unknown = StellarSdk.scValToNative(value);
@@ -577,7 +914,7 @@ function describeInvocation(
   args: StellarSdk.xdr.InvokeContractArgs,
 ): ContractInvocation {
   const functionName = args.functionName.toString();
-  const types = args.args.map((arg) => arg.type);
+  const types = args.args.map((arg: StellarSdk.xdr.ScVal) => arg.type);
   const tokenSignatures: Record<string, string[]> = {
     transfer: ["scvAddress", "scvAddress", "scvI128"],
     balance: ["scvAddress"],
@@ -611,78 +948,15 @@ function describeInvocation(
       args.contractAddress,
     ).toString(),
     functionName,
-    args: args.args.map(formatScVal),
+    args: args.args.map((arg: StellarSdk.xdr.ScVal) => formatScVal(arg)),
     argTypes: types,
     interfaceEstimation: { name, basis: "function name and argument types" },
   };
 }
 
-    const op = tx.operations[0];
-    const invocation =
-      op?.type === "invokeHostFunction" && op.func
-        ? parseContractInvocation(op.func, networkPassphrase)
-        : undefined;
-    if (
-      invocation?.isContractCreation &&
-      !hasContractCreationInstance(
-        invocation,
-        processed.rawFootprint?.readWrite ?? [],
-      )
-    ) {
-      return {
-        success: false,
-        error:
-          "Contract creation simulation is missing the writable contract instance key.",
-        code: ErrorCode.SIMULATION_DATA_MISSING,
-        invocation,
-        raw: response,
-      };
-    }
-
-    const ledgerWarning = buildLedgerSequenceWarning(
-      ledgerSequence,
-      response.latestLedger,
-    );
-    return {
-      success: true,
-      footprint: {
-        readOnly: processed.footprint?.readOnly ?? [],
-        readWrite: processed.footprint?.readWrite ?? [],
-      },
-      invocation,
-      contractId: invocation?.isContractCreation
-        ? invocation.contractId
-        : undefined,
-      contracts: processed.contracts,
-      contractType: processed.contractType,
-      ttl: processed.ttl,
-      optimized: processed.optimized,
-      rawFootprint: processed.rawFootprint,
-      footprintStats: processed.footprintStats,
-      cost: {
-        cpuInsns: responseCost?.cpuInsns ?? "0",
-        memBytes: responseCost?.memBytes ?? "0",
-      },
-      warnings: [
-        ...buildTtlWarnings(processed.ttl ?? {}),
-        ...(ledgerWarning ? [ledgerWarning] : []),
-      ],
-      requiredSigners: processed.requiredSigners,
-      threshold: processed.threshold,
-      raw: response,
-      upgradedFromV0: upgradedFromV0 || undefined,
-      diagnosticEvents,
-    };
-  });
-  return {
-    dryRun: true,
-    network,
-    sourceAccount: inner.source,
-    sequence: inner.sequence,
-    operationCount: operations.length,
-    operations,
-  };
-}
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
 
 const ADMIN_FUNCTIONS = new Set([
   "set_admin",
@@ -753,8 +1027,6 @@ function extractRequiredSigners(
     seen.add(encoded);
     const address = authorizer(entry, source);
     requiredSigners.add(address);
-    // Credentials authorize the entire tree. Addresses in arguments are values,
-    // not additional signers (a transfer recipient need not authorize it).
     const invocationTree = describeAuthTree(entry.rootInvocation);
     authEntries.push({
       contractId: invocationTree.invocation?.contractId ?? "",
@@ -803,7 +1075,6 @@ function simulationAuth(
   const fromEnvelope = new Map(
     existing.map((entry) => [identity(entry), entry]),
   );
-  // Prefer supplied signatures only when they authorize the same simulated tree.
   return (response.result?.auth ?? existing).map(
     (entry) => fromEnvelope.get(identity(entry)) ?? entry,
   );
@@ -816,29 +1087,33 @@ async function fetchTouchedAccounts(
 ): Promise<Map<string, StellarSdk.xdr.AccountEntry>> {
   const accounts = new Map<string, StellarSdk.xdr.AccountEntry>();
   const put = (data: StellarSdk.xdr.LedgerEntryData) => {
-    if (data.type === "account")
-      accounts.set(
-        StellarSdk.StrKey.encodeEd25519PublicKey(
-          data.account.accountId.ed25519.toBytes(),
-        ),
-        data.account,
-      );
+    if (data.type === "account") {
+      const acct = data.account;
+      const pk = acct.accountId;
+      if (pk.type === "publicKeyTypeEd25519") {
+        accounts.set(
+          StellarSdk.StrKey.encodeEd25519PublicKey(
+            pk.ed25519 as unknown as Uint8Array,
+          ),
+          acct,
+        );
+      }
+    }
   };
   for (const change of response.stateChanges ?? []) {
-    // Threshold changes produced by simulation must not authorize that same call.
     if (change.before) put(change.before.data);
   }
   const keys = [...new Set(rawKeys)]
     .map((key) => StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"))
-    .filter(
-      (key) =>
-        key.type === "account" &&
-        !accounts.has(
-          StellarSdk.StrKey.encodeEd25519PublicKey(
-            key.account.accountId.ed25519.toBytes(),
-          ),
-        ),
-    );
+    .filter((key) => {
+      if (key.type !== "account") return false;
+      const pk = key.account.accountId;
+      if (pk.type !== "publicKeyTypeEd25519") return false;
+      const encoded = StellarSdk.StrKey.encodeEd25519PublicKey(
+        pk.ed25519 as unknown as Uint8Array,
+      );
+      return !accounts.has(encoded);
+    });
   try {
     for (let i = 0; i < keys.length; i += 200) {
       const entries = await rpcCircuitBreaker.call(() =>
@@ -852,14 +1127,13 @@ async function fetchTouchedAccounts(
   return accounts;
 }
 
-/** Standard account signatures are vec<map<public_key: bytes, signature: bytes>>. */
 function suppliedSignatureKeys(signature: StellarSdk.xdr.ScVal): string[] {
   if (signature.type !== "scvVec") return [];
   const keys = new Set<string>();
   for (const value of signature.vec ?? []) {
     if (value.type !== "scvMap") continue;
     const fields = new Map(
-      (value.map ?? []).flatMap((field) =>
+      (value.map ?? []).flatMap((field: StellarSdk.xdr.ScMapEntry) =>
         field.key.type === "scvSymbol"
           ? [[field.key.sym.toString(), field.val] as const]
           : [],
@@ -869,11 +1143,15 @@ function suppliedSignatureKeys(signature: StellarSdk.xdr.ScVal): string[] {
     const sig = fields.get("signature");
     if (
       key?.type === "scvBytes" &&
-      key.bytes.toBytes().length === 32 &&
+      (key.bytes as unknown as Uint8Array).length === 32 &&
       sig?.type === "scvBytes" &&
-      sig.bytes.toBytes().length === 64
+      (sig.bytes as unknown as Uint8Array).length === 64
     )
-      keys.add(StellarSdk.StrKey.encodeEd25519PublicKey(key.bytes.toBytes()));
+      keys.add(
+        StellarSdk.StrKey.encodeEd25519PublicKey(
+          key.bytes as unknown as Uint8Array,
+        ),
+      );
   }
   return [...keys];
 }
@@ -898,12 +1176,15 @@ function buildThresholdReports(
     const account = accounts.get(accountId);
     const weights = new Map<string, number>();
     if (account) {
-      weights.set(accountId, account.thresholds.toBytes()[0]);
+      const threshBytes = Buffer.from(
+        account.thresholds as unknown as Uint8Array,
+      );
+      weights.set(accountId, threshBytes[0]);
       for (const signer of account.signers) {
         if (signer.key.type === "signerKeyTypeEd25519")
           weights.set(
             StellarSdk.StrKey.encodeEd25519PublicKey(
-              signer.key.ed25519.toBytes(),
+              signer.key.ed25519 as unknown as Uint8Array,
             ),
             signer.weight,
           );
@@ -915,7 +1196,7 @@ function buildThresholdReports(
           tx.signatures.some((sig) =>
             StellarSdk.Keypair.fromPublicKey(key).verify(
               tx.hash(),
-              sig.signature.toBytes(),
+              sig.signature as unknown as Buffer,
             ),
           ),
         );
@@ -923,8 +1204,11 @@ function buildThresholdReports(
       publicKey,
       weight: account ? (weights.get(publicKey) ?? 0) : null,
     }));
-    const thresholdRequired = account
-      ? account.thresholds.toBytes()[authorizationLevel === "admin" ? 3 : 2]
+    const threshBytes = account
+      ? Buffer.from(account.thresholds as unknown as Uint8Array)
+      : null;
+    const thresholdRequired = threshBytes
+      ? threshBytes[authorizationLevel === "admin" ? 3 : 2]
       : null;
     const totalWeight = account
       ? Math.min(

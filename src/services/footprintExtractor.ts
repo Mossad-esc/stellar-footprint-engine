@@ -1,43 +1,33 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
+import { getRpcServer, getNetworkConfig, Network } from "../config/stellar";
+import {
+  FootprintStats,
+  ContractType,
+  AssetInfo,
+  SacContract,
+  FootprintBreakdown,
+} from "../types";
 import {
   parseFootprint,
   extractContracts,
   detectTokenContract,
   mergeFootprints,
   detectSacContracts,
+  calculateFootprintStats as _calculateFootprintStats,
   type FootprintEntry,
-  type ContractType,
 } from "./footprintParser";
 import { optimizeFootprint } from "./optimizer";
-import { getRpcServer, Network } from "../config/stellar";
-import { FootprintStats } from "../types";
 
-/** Exact LedgerFootprint wire sizes, including both XDR array length prefixes. */
+/**
+ * Exact LedgerFootprint wire sizes, including both XDR array length prefixes.
+ * Kept for API compatibility with controllers and feeEstimator.
+ */
 export function calculateFootprintStats(
   readOnly: string[],
   readWrite: string[],
 ): FootprintStats {
-  const footprint = new StellarSdk.xdr.LedgerFootprint({
-    readOnly: readOnly.map((key) =>
-      StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
-    ),
-    readWrite: readWrite.map((key) =>
-      StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
-    ),
-  });
-  return {
-    readOnlyCount: readOnly.length,
-    readWriteCount: readWrite.length,
-    totalEntries: readOnly.length + readWrite.length,
-    readOnlySizeBytes:
-      4 +
-      footprint.readOnly().reduce((sum, key) => sum + key.toXDR().length, 0),
-    readWriteSizeBytes:
-      4 +
-      footprint.readWrite().reduce((sum, key) => sum + key.toXDR().length, 0),
-    estimatedSizeBytes: footprint.toXDR().length,
-  };
+  return _calculateFootprintStats({ readOnly, readWrite });
 }
 
 export interface ExtractedFootprint {
@@ -67,9 +57,7 @@ export interface ExtractedFootprint {
  * Extract footprint from simulation response
  */
 export async function extractFootprint(
-  response:
-    | StellarSdk.rpc.Api.SimulateTransactionSuccessResponse
-    | readonly StellarSdk.rpc.Api.SimulateTransactionSuccessResponse[],
+  response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
   network: Network,
 ): Promise<ExtractedFootprint> {
   if (!response.transactionData) {
@@ -102,11 +90,8 @@ export async function extractFootprint(
   const allEntries = [...rawFootprint.readOnly, ...rawFootprint.readWrite];
   const contracts = extractContracts(allEntries);
 
-  const merged = parseFootprint(
-    mergeFootprints([rawFootprint]),
-    networkPassphrase,
-    sacContracts,
-  );
+  const mergedRaw = mergeFootprints([rawFootprint]);
+  const merged = parseFootprint(mergedRaw, networkPassphrase, sacContracts);
   const optimizationResult = {
     readOnly: merged.readOnly,
     readWrite: merged.readWrite,
@@ -115,19 +100,20 @@ export async function extractFootprint(
       rawFootprint.readOnly.length + rawFootprint.readWrite.length,
   };
 
-  const contractType = parsedFootprint.isSAC
+  const contractType: ContractType = parsedFootprint.isSAC
     ? "sac"
     : contracts.length > 0
       ? await detectTokenContract(contracts[0], server, networkPassphrase)
       : "unknown";
 
   return {
-    footprintStats: calculateFootprintStats(
-      rawFootprint.readOnly,
-      rawFootprint.readWrite,
-    ),
+    footprintStats: _calculateFootprintStats(rawFootprint, parsedFootprint),
     rawFootprint,
-    parsedFootprint,
+    parsedFootprint: {
+      readOnly: parsedFootprint.readOnly,
+      readWrite: parsedFootprint.readWrite,
+      breakdown: parsedFootprint.breakdown,
+    },
     optimizationResult,
     contracts,
     contractType,
@@ -144,27 +130,54 @@ export async function extractFootprint(
 export function extractEnvelopeFootprint(
   envelope: StellarSdk.xdr.TransactionEnvelope,
 ): { readOnly: string[]; readWrite: string[] } {
-  const type = envelope.switch().name;
-  const tx =
-    type === "envelopeTypeTxFeeBump"
-      ? envelope.feeBump().tx().innerTx().v1().tx()
-      : type === "envelopeTypeTx"
-        ? envelope.v1().tx()
-        : undefined;
-  if (!tx || tx.ext().switch() !== 1) return { readOnly: [], readWrite: [] };
-  const hasSorobanOperation = tx
-    .operations()
-    .some((operation) =>
-      ["invokeHostFunction", "extendFootprintTtl", "restoreFootprint"].includes(
-        operation.body().switch().name,
-      ),
+  const type = envelope.type;
+  let tx: StellarSdk.xdr.Transaction | undefined;
+
+  if (type === "envelopeTypeTxFeeBump") {
+    const inner = envelope.feeBump.tx.innerTx;
+    if (inner.type === "envelopeTypeTx") {
+      tx = inner.v1.tx;
+    }
+  } else if (type === "envelopeTypeTx") {
+    tx = envelope.v1.tx;
+  }
+
+  if (!tx) return { readOnly: [], readWrite: [] };
+
+  // Check if sorobanData extension is present (ext.v() === 1)
+  const ext = tx.ext;
+  // In the new SDK, ext is a discriminated union; check if sorobanData key exists
+  if (!ext || !("sorobanData" in ext)) return { readOnly: [], readWrite: [] };
+  const sorobanExt = ext as {
+    sorobanData: {
+      resources: {
+        footprint: {
+          readOnly: StellarSdk.xdr.LedgerKey[];
+          readWrite: StellarSdk.xdr.LedgerKey[];
+        };
+      };
+    };
+  };
+
+  const hasSorobanOperation = tx.operations.some((operation) => {
+    const bodyType = operation.body.type;
+    return (
+      bodyType === "invokeHostFunction" ||
+      bodyType === "extendFootprintTtl" ||
+      bodyType === "restoreFootprint"
     );
+  });
   if (!hasSorobanOperation) return { readOnly: [], readWrite: [] };
-  const footprint = tx.ext().sorobanData().resources().footprint();
+
+  const footprint = sorobanExt.sorobanData.resources.footprint;
   return mergeFootprints([
     {
-      readOnly: footprint.readOnly().map((key) => key.toXDR("base64")),
-      readWrite: footprint.readWrite().map((key) => key.toXDR("base64")),
+      readOnly: footprint.readOnly.map((key: StellarSdk.xdr.LedgerKey) =>
+        key.toXDR("base64"),
+      ),
+      readWrite: footprint.readWrite.map((key: StellarSdk.xdr.LedgerKey) =>
+        key.toXDR("base64"),
+      ),
     },
   ]);
 }

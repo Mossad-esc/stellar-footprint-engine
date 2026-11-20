@@ -1,5 +1,7 @@
 import { createHash } from "crypto";
 
+import * as StellarSdk from "@stellar/stellar-sdk";
+
 import metrics from "../middleware/metrics";
 import { logger } from "../utils/logger";
 
@@ -310,15 +312,101 @@ export function setCache(instance: CacheService): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Canonicalize a base64 transaction XDR so that semantically identical
+ * transactions with different signature orders or non-semantic envelope
+ * attributes produce the same string.
+ *
+ * The strategy:
+ *  1. Parse the envelope into a TransactionEnvelope.
+ *  2. Clear decorative signatures from the envelope (they are non-semantic
+ *     for footprint simulation purposes).
+ *  3. For v1 envelopes, sort the Soroban auth array by XDR bytes so that
+ *     different orderings collapse to the same canonical form.
+ *  4. Re-serialize back to base64.
+ *
+ * Invalid XDR is returned as-is so callers can still hash it without crashing.
+ */
+export function canonicalizeTransactionXdr(xdr: string): string {
+  try {
+    const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(xdr, "base64");
+
+    if (envelope.type === "envelopeTypeTx") {
+      const v1 = envelope.v1;
+      // Sort Soroban auth arrays so signature-order differences collapse
+      const ops = v1.tx.operations;
+      for (const op of ops) {
+        if (op.body.type === "invokeHostFunction") {
+          const auth = op.body.invokeHostFunctionOp.auth;
+          if (auth.length > 1) {
+            auth.sort(
+              (
+                a: StellarSdk.xdr.SorobanAuthorizationEntry,
+                b: StellarSdk.xdr.SorobanAuthorizationEntry,
+              ) => {
+                const aBuf = Buffer.from(a.toXDR());
+                const bBuf = Buffer.from(b.toXDR());
+                return aBuf.compare(bBuf);
+              },
+            );
+          }
+        }
+      }
+      // Clear decorative signatures — they don't affect simulation outcome
+      const normalized = new StellarSdk.xdr.TransactionV1Envelope({
+        tx: v1.tx,
+        signatures: [],
+      });
+      return StellarSdk.xdr.TransactionEnvelope.envelopeTypeTx(
+        normalized,
+      ).toXDR("base64");
+    }
+
+    if (envelope.type === "envelopeTypeTxFeeBump") {
+      const fb = envelope.feeBump;
+      const normalized = new StellarSdk.xdr.FeeBumpTransactionEnvelope({
+        tx: fb.tx,
+        signatures: [],
+      });
+      return StellarSdk.xdr.TransactionEnvelope.envelopeTypeTxFeeBump(
+        normalized,
+      ).toXDR("base64");
+    }
+
+    if (envelope.type === "envelopeTypeTxV0") {
+      const v0 = envelope.v0;
+      const normalized = new StellarSdk.xdr.TransactionV0Envelope({
+        tx: v0.tx,
+        signatures: [],
+      });
+      return StellarSdk.xdr.TransactionEnvelope.envelopeTypeTxV0(
+        normalized,
+      ).toXDR("base64");
+    }
+
+    return xdr;
+  } catch {
+    // Invalid XDR — fall back to the raw string
+    return xdr;
+  }
+}
+
+/**
  * Build a deterministic cache key from arbitrary request data.
+ * When an `xdr` field is present the XDR is canonicalized before hashing so
+ * that semantically identical transactions with different signature orders
+ * produce the same cache key.
  * Uses SHA-256 so key length is always fixed regardless of input size.
  */
 export function buildCacheKey(data: Record<string, unknown>): string {
+  const normalized = { ...data };
+  if (typeof normalized.xdr === "string") {
+    normalized.xdr = canonicalizeTransactionXdr(normalized.xdr);
+  }
   const canonical = JSON.stringify(
-    Object.keys(data)
+    Object.keys(normalized)
       .sort()
       .reduce<Record<string, unknown>>((acc, k) => {
-        acc[k] = data[k];
+        acc[k] = normalized[k];
         return acc;
       }, {}),
   );
