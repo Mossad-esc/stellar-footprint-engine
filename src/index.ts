@@ -88,7 +88,20 @@ app.use((_req, res, next) => {
   next();
 });
 app.use(compression({ threshold: COMPRESSION_THRESHOLD }));
-app.use(express.json({ limit: process.env.BODY_LIMIT || "100kb" }));
+// Route-specific JSON body limits (guards against memory exhaustion DoS).
+// Batch endpoints accept arrays of transactions and get a larger limit.
+export const DEFAULT_BODY_LIMIT = process.env.BODY_LIMIT || "250kb";
+export const BATCH_BODY_LIMIT = process.env.BATCH_BODY_LIMIT || "2mb";
+const BATCH_PATH_RE = /^\/api(?:\/v1)?\/simulate\/batch\/?$/;
+const defaultJsonParser = express.json({ limit: DEFAULT_BODY_LIMIT });
+const batchJsonParser = express.json({ limit: BATCH_BODY_LIMIT });
+app.use((req, res, next) =>
+  (BATCH_PATH_RE.test(req.path) ? batchJsonParser : defaultJsonParser)(
+    req,
+    res,
+    next,
+  ),
+);
 app.use(responseTimeMiddleware);
 app.use(ipFilterMiddleware);
 app.use(requestIdMiddleware);

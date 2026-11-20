@@ -1,6 +1,8 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
+import request from "supertest";
 
 import { clearRpcPool } from "../../config/stellar";
+import app from "../../index";
 import { simulateTransaction } from "../../services/simulator";
 import {
   contractDataKey,
@@ -306,5 +308,42 @@ describe("simulateTransaction Integration Tests", () => {
       expect(result.cost?.cpuInsns).toBeDefined();
       expect(result.cost?.memBytes).toBeDefined();
     });
+  });
+});
+
+describe("Request body size limits", () => {
+  const pad = (bytes: number) => "a".repeat(bytes);
+
+  it("rejects an oversized batch body with 413 and the error envelope", async () => {
+    const res = await request(app)
+      .post("/api/v1/simulate/batch")
+      .set("Content-Type", "application/json")
+      .send(JSON.stringify({ network: "testnet", pad: pad(2 * 1024 * 1024) }));
+
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    expect(typeof res.body.error).toBe("string");
+  });
+
+  it("accepts a batch body above the default limit but under 2mb", async () => {
+    const res = await request(app)
+      .post("/api/v1/simulate/batch")
+      .set("Content-Type", "application/json")
+      .send(JSON.stringify({ network: "testnet", pad: pad(1024 * 1024) }));
+
+    expect(res.status).not.toBe(413);
+  });
+
+  it("enforces the smaller limit on non-batch endpoints", async () => {
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .set("Content-Type", "application/json")
+      .send(JSON.stringify({ network: "testnet", pad: pad(300 * 1024) }));
+
+    expect(res.status).toBe(413);
+    expect(res.body.code).toBe("PAYLOAD_TOO_LARGE");
   });
 });

@@ -59,6 +59,18 @@ export function errorHandler(
     return;
   }
 
+  if ((err as { type?: string }).type === "entity.too.large") {
+    res.status(413).json({
+      success: false,
+      error: "Payload Too Large: request body exceeds the allowed size limit",
+      code: ErrorCode.PAYLOAD_TOO_LARGE,
+      ...(res.locals.requestId
+        ? { requestId: res.locals.requestId as string }
+        : {}),
+    } satisfies ResponseEnvelope & { requestId?: string });
+    return;
+  }
+
   const statusCode =
     isAppError(err) && typeof err.statusCode === "number"
       ? err.statusCode
