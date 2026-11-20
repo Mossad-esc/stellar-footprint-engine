@@ -8,14 +8,15 @@ const _startupBegin = process.hrtime.bigint();
 import path from "path";
 
 import compression from "compression";
-import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 
 import routes from "./api/routes";
+import { env } from "./config/env";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { bruteForceMiddleware } from "./middleware/bruteForce";
 import { contentTypeMiddleware } from "./middleware/contentType";
+import { corsMiddleware } from "./middleware/cors";
 import { errorHandler } from "./middleware/errorHandler";
 import { httpCacheMiddleware } from "./middleware/httpCache";
 import { ipFilterMiddleware } from "./middleware/ipFilter";
@@ -33,18 +34,7 @@ const COMPRESSION_THRESHOLD = parseInt(
   10,
 );
 
-function buildCorsOptions(): cors.CorsOptions {
-  const origin = process.env.CORS_ORIGIN;
-  if (!origin) {
-    return process.env.NODE_ENV === "production"
-      ? { origin: false }
-      : { origin: "*" };
-  }
-  const allowed = origin.split(",").map((o) => o.trim());
-  return { origin: allowed.length === 1 ? allowed[0] : allowed };
-}
-
-app.use(cors(buildCorsOptions()));
+app.use(corsMiddleware(env.CORS_ALLOWED_ORIGINS));
 app.use(
   helmet({
     contentSecurityPolicy: {
