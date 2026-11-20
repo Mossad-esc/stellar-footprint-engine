@@ -17,9 +17,13 @@ function makeRes(requestId?: string) {
   } as unknown as Response & { _headers: Record<string, string> };
 }
 
-function makeReq(acceptLanguage?: string): Request {
+function makeReq(acceptLanguage?: string, accept?: string): Request {
   return {
-    headers: { "accept-language": acceptLanguage },
+    headers: {
+      "accept-language": acceptLanguage,
+      ...(accept !== undefined ? { accept } : {}),
+    },
+    path: "/test",
   } as unknown as Request;
 }
 
@@ -122,5 +126,44 @@ describe("errorHandler", () => {
 
     const body = (res.json as jest.Mock).mock.calls[0][0];
     expect(body.requestId).toBe("req-abc-456");
+  });
+
+  // ---------------------------------------------------------------------------
+  // #41 — RFC 7807 problem+json
+  // ---------------------------------------------------------------------------
+
+  it("returns RFC 7807 problem+json when Accept header requests it", () => {
+    const err = new AppError("Missing required field: xdr", 400);
+    const res = makeRes();
+    const req = {
+      headers: { accept: "application/problem+json" },
+      path: "/simulate",
+    } as unknown as Request;
+    errorHandler(err, req, res, next);
+
+    expect(res.set).toHaveBeenCalledWith(
+      "Content-Type",
+      "application/problem+json",
+    );
+    const body = (res.json as jest.Mock).mock.calls[0][0];
+    expect(body.type).toBe(
+      "https://docs.stellarfootprint.org/errors/MISSING_XDR",
+    );
+    expect(body.title).toBe("Missing XDR");
+    expect(body.status).toBe(400);
+    expect(body.detail).toBe("Missing required field: xdr");
+    expect(body.instance).toBe("/simulate");
+  });
+
+  it("returns standard ResponseEnvelope for default application/json", () => {
+    const err = new AppError("Missing required field: xdr", 400);
+    const res = makeRes();
+    const req = makeReq(); // no special Accept header
+    errorHandler(err, req, res, next);
+
+    const body = (res.json as jest.Mock).mock.calls[0][0];
+    expect(body.success).toBe(false);
+    expect(body.error).toBeDefined();
+    expect(body.type).toBeUndefined();
   });
 });
