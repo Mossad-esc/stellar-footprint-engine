@@ -13,6 +13,7 @@ import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { calculateFootprintStats } from "@services/footprintExtractor";
 import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
+import { getRpcStats } from "@services/rpcClient";
 import {
   simulateTransaction,
   simulateDryRun as analyzeDryRun,
@@ -1007,4 +1008,35 @@ export function getSimulationJob(
     data: job,
   };
   res.status(HTTP_STATUS.OK).json(response);
+}
+
+// ---------------------------------------------------------------------------
+// #40 — GET /rpc/status — Live RPC pool stats and circuit breaker state
+// ---------------------------------------------------------------------------
+
+export function rpcStatus(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  try {
+    const adminKey = process.env.ADMIN_API_KEY;
+    if (adminKey) {
+      const provided =
+        (req.headers["x-admin-key"] as string | undefined) ||
+        (req.headers["authorization"] as string | undefined)?.replace(
+          "Bearer ",
+          "",
+        );
+      if (provided !== adminKey) {
+        return next(new AppError("Unauthorized", HTTP_STATUS.UNAUTHORIZED));
+      }
+    }
+    const stats = getRpcStats();
+    res.status(HTTP_STATUS.OK).json({ success: true, data: stats });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
 }

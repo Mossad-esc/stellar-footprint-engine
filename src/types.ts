@@ -7,6 +7,23 @@ export interface ResponseEnvelope<T = unknown> {
   code?: ErrorCode;
 }
 
+/**
+ * RFC 7807 Problem Details for HTTP APIs
+ * @see https://www.rfc-editor.org/rfc/rfc7807
+ */
+export interface ProblemDetails {
+  /** URI reference identifying the problem type (links to documentation). */
+  type: string;
+  /** Short human-readable summary of the problem type. */
+  title: string;
+  /** HTTP status code. */
+  status: number;
+  /** Human-readable explanation specific to this occurrence. */
+  detail: string;
+  /** URI reference identifying the specific occurrence (request path). */
+  instance: string;
+}
+
 export interface FootprintStats {
   readOnlyCount: number;
   readWriteCount: number;
@@ -23,10 +40,7 @@ export interface FootprintStats {
 }
 
 export type StorageCategory =
-  | "contractCode"
-  | "contractInstance"
-  | "persistentData"
-  | "temporaryData";
+  "contractCode" | "contractInstance" | "persistentData" | "temporaryData";
 
 export interface StorageStats {
   count: number;
