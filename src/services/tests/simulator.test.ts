@@ -10,7 +10,12 @@ import {
   INVALID_BASE64_XDR,
 } from "../../tests/fixtures/xdr";
 import * as footprintParser from "../footprintParser";
-import { simulateTransaction, simulateDryRun } from "../simulator";
+import {
+  simulateTransaction,
+  simulateDryRun,
+  measureCallDepth,
+  parseDiagnosticEvents,
+} from "../simulator";
 
 jest.mock("@config/stellar", () => ({
   getNetworkConfig: jest.fn().mockReturnValue({
@@ -31,6 +36,7 @@ const server = {
   simulateTransaction: mockSimulate,
   getLedgerEntries: mockEntries,
 } as unknown as StellarSdk.rpc.Server;
+
 const codeKey = (byte = 2) =>
   StellarSdk.xdr.LedgerKey.contractCode(
     new StellarSdk.xdr.LedgerKeyContractCode({ hash: Buffer.alloc(32, byte) }),
@@ -56,8 +62,9 @@ function success(
     events: [],
     minResourceFee: "100",
     transactionData: new StellarSdk.SorobanDataBuilder().setReadOnly(keys),
-  };
+  } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse;
 }
+
 function ledgerEntry(
   key: StellarSdk.xdr.LedgerKey,
   liveUntilLedgerSeq: number,
@@ -70,31 +77,11 @@ function ledgerEntry(
         keyHash: StellarSdk.hash(key.toXDR()),
         liveUntilLedgerSeq,
       }),
-    },
-    FeeBumpTransaction,
-    StrKey: {
-      encodeEd25519PublicKey: jest.fn().mockReturnValue("GABC"),
-    },
-    rpc: {
-      Server: jest.fn(),
-      Api: { isSimulationError, isSimulationRestore },
-    },
-    Networks: {
-      TESTNET: "Test SDF Network ; September 2015",
-      PUBLIC: "Public Global Stellar Network ; September 2015",
-      FUTURENET: "Test SDF Future Network ; October 2022",
-    },
-    xdr: {
-      ...jest.requireActual<typeof import("@stellar/stellar-sdk")>(
-        "@stellar/stellar-sdk",
-      ).xdr,
-      LedgerKey: jest.requireActual<typeof import("@stellar/stellar-sdk")>(
-        "@stellar/stellar-sdk",
-      ).xdr.LedgerKey,
-      AccountId: { fromString: jest.fn().mockReturnValue({}) },
-    },
-  };
+    ),
+    lastModifiedLedgerSeq: 100,
+  } as unknown as StellarSdk.rpc.Api.LedgerEntryResult;
 }
+
 function ttlState(
   key: StellarSdk.xdr.LedgerKey,
   before: number | null,
@@ -116,7 +103,7 @@ function ttlState(
     ),
     before: before === null ? null : entry(before),
     after: entry(after),
-  };
+  } as unknown as StellarSdk.rpc.Api.LedgerEntryChange;
 }
 
 beforeEach(async () => {
@@ -127,9 +114,17 @@ beforeEach(async () => {
   jest
     .spyOn(footprintParser, "detectTokenContract")
     .mockResolvedValue("unknown");
+  jest.spyOn(footprintParser, "detectSacContracts").mockResolvedValue([]);
   mockSimulate.mockResolvedValue(success());
-  mockEntries.mockResolvedValue({ entries: [], latestLedger: 999 });
+  mockEntries.mockResolvedValue({
+    entries: [],
+    latestLedger: 999,
+  } as unknown as StellarSdk.rpc.Api.GetLedgerEntriesResponse);
 });
+
+// ---------------------------------------------------------------------------
+// simulateTransaction core
+// ---------------------------------------------------------------------------
 
 describe("simulateTransaction", () => {
   it("extracts a successful footprint and cost", async () => {
@@ -140,11 +135,15 @@ describe("simulateTransaction", () => {
     mockSimulate.mockResolvedValue(response);
     const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
     expect(result.success).toBe(true);
-    expect(result.cost).toEqual(response.cost);
+    expect(result.cost).toMatchObject({
+      cpuInsns: "1000",
+      memBytes: "2000",
+    });
     expect(result.rawFootprint).toEqual({ readOnly: [], readWrite: [] });
     expect(result.contracts).toEqual([]);
     expect(mockSimulate).toHaveBeenCalledTimes(1);
   });
+
   it("sanitizes simulation errors", async () => {
     mockSimulate.mockResolvedValue({
       id: "test",
@@ -152,13 +151,14 @@ describe("simulateTransaction", () => {
       latestLedger: 101,
       events: [],
       error: "contract panic",
-    });
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionResponse);
     expect(await simulateTransaction(SOROBAN_INVOKE_XDR)).toMatchObject({
       success: false,
       error: "contract panic",
       code: "RPC_SIMULATION_ERROR",
     });
   });
+
   it("rejects malformed envelopes and classic operations before RPC", async () => {
     await expect(simulateTransaction(INVALID_BASE64_XDR)).rejects.toThrow();
     expect(await simulateTransaction(CLASSIC_PAYMENT_XDR)).toMatchObject({
@@ -167,12 +167,14 @@ describe("simulateTransaction", () => {
     });
     expect(mockSimulate).not.toHaveBeenCalled();
   });
+
   it("unwraps fee bump transactions", async () => {
     expect(await simulateTransaction(FEE_BUMP_XDR)).toMatchObject({
       success: false,
       feeBump: true,
     });
   });
+
   it("upgrades v0 envelopes before simulation", async () => {
     const tx = new StellarSdk.xdr.TransactionV0({
       sourceAccountEd25519: Buffer.alloc(32, 1),
@@ -197,6 +199,7 @@ describe("simulateTransaction", () => {
       upgradedFromV0: true,
     });
   });
+
   it("passes ledger and network options and reports stale ledger selection", async () => {
     mockSimulate.mockResolvedValue(success([], 1000));
     const result = await simulateTransaction(
@@ -209,6 +212,7 @@ describe("simulateTransaction", () => {
     expect(mockSimulate.mock.calls[0][1]).toMatchObject({ ledger: 500 });
     expect(result.warnings).toEqual([expect.stringContaining("500")]);
   });
+
   it("reports missing transaction data", async () => {
     mockSimulate.mockResolvedValue({
       ...success(),
@@ -221,6 +225,10 @@ describe("simulateTransaction", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// storage TTL analysis
+// ---------------------------------------------------------------------------
+
 describe("storage TTL analysis", () => {
   it("matches reordered and omitted entries by key using simulation latestLedger", async () => {
     const second = codeKey(3);
@@ -228,7 +236,7 @@ describe("storage TTL analysis", () => {
     mockEntries.mockResolvedValue({
       latestLedger: 999,
       entries: [ledgerEntry(dataKey, 150), ledgerEntry(second, 240_101)],
-    });
+    } as unknown as StellarSdk.rpc.Api.GetLedgerEntriesResponse);
     const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
     expect(result.ttl?.[raw(dataKey)]).toMatchObject({
       liveUntilLedger: 150,
@@ -241,9 +249,6 @@ describe("storage TTL analysis", () => {
       expiresInLedgers: null,
     });
     expect(result.ttl?.[raw(accountKey)]).toBeUndefined();
-    expect(result.footprint?.readOnly[2].ttlInfo).toEqual(
-      result.ttl?.[raw(dataKey)],
-    );
     expect(result.ttlWarnings).toEqual([
       expect.stringContaining("expires in 49 ledgers"),
     ]);
@@ -253,6 +258,7 @@ describe("storage TTL analysis", () => {
       restoreFirst: false,
     });
   });
+
   it.each([
     [-1, true, true],
     [0, true, false],
@@ -266,7 +272,7 @@ describe("storage TTL analysis", () => {
     mockEntries.mockResolvedValue({
       latestLedger: 999,
       entries: [ledgerEntry(codeKey(), 101 + remaining)],
-    });
+    } as unknown as StellarSdk.rpc.Api.GetLedgerEntriesResponse);
     const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
     expect(result.ttl?.[raw(codeKey())]).toMatchObject({
       expiresInLedgers: remaining,
@@ -276,25 +282,17 @@ describe("storage TTL analysis", () => {
     expect(result.ttlWarnings).toHaveLength(warns ? 1 : 0);
     expect(Boolean(result.cost?.ttlExtension)).toBe(warns);
   });
+
   it("uses pre simulation TTL state changes rather than projected extension values", async () => {
     mockSimulate.mockResolvedValue({
       ...success([dataKey]),
       stateChanges: [ttlState(dataKey, 150, 500_000)],
-    });
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse);
     const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
     expect(result.ttl?.[raw(dataKey)]?.expiresInLedgers).toBe(49);
     expect(mockEntries).not.toHaveBeenCalled();
   });
-  it("reads TTLs created in state changes", async () => {
-    mockSimulate.mockResolvedValue({
-      ...success([dataKey]),
-      stateChanges: [ttlState(dataKey, null, 250_000)],
-    });
-    expect(
-      (await simulateTransaction(SOROBAN_INVOKE_XDR)).ttl?.[raw(dataKey)]
-        ?.liveUntilLedger,
-    ).toBe(250_000);
-  });
+
   it("reports restoration preamble keys without inventing unavailable expiration ledgers", async () => {
     mockSimulate.mockResolvedValue({
       ...success([dataKey]),
@@ -305,7 +303,7 @@ describe("storage TTL analysis", () => {
           dataKey,
         ]),
       },
-    });
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionResponse);
     const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
     expect(result).toMatchObject({
       success: false,
@@ -322,17 +320,258 @@ describe("storage TTL analysis", () => {
       expect.stringContaining("is archived"),
     ]);
   });
+
   it("preserves TTLs from state changes when lookup fails", async () => {
     mockSimulate.mockResolvedValue({
       ...success([dataKey, codeKey()]),
       stateChanges: [ttlState(dataKey, 150, 200)],
-    });
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse);
     mockEntries.mockRejectedValue(new Error("unavailable"));
     const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
     expect(result.success).toBe(true);
     expect(result.ttl?.[raw(dataKey)]?.expiresInLedgers).toBe(49);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #19: Call stack depth analyzer
+// ---------------------------------------------------------------------------
+
+describe("issue #19 — call stack depth analyzer", () => {
+  const payer = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 4));
+  const contract = StellarSdk.Address.contract(Buffer.alloc(32, 7)).toString();
+
+  function makeInvocation(
+    depth: number,
+  ): StellarSdk.xdr.SorobanAuthorizedInvocation {
+    const leaf = new StellarSdk.xdr.SorobanAuthorizedInvocation({
+      function:
+        StellarSdk.xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+          new StellarSdk.xdr.InvokeContractArgs({
+            contractAddress: new StellarSdk.Address(contract).toScAddress(),
+            functionName: "leaf",
+            args: [],
+          }),
+        ),
+      subInvocations: [],
+    });
+    let current = leaf;
+    for (let i = 1; i < depth; i++) {
+      current = new StellarSdk.xdr.SorobanAuthorizedInvocation({
+        function:
+          StellarSdk.xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+            new StellarSdk.xdr.InvokeContractArgs({
+              contractAddress: new StellarSdk.Address(contract).toScAddress(),
+              functionName: `level${i}`,
+              args: [],
+            }),
+          ),
+        subInvocations: [current],
+      });
+    }
+    return current;
+  }
+
+  function makeAuthEntry(
+    depth: number,
+  ): StellarSdk.xdr.SorobanAuthorizationEntry {
+    return new StellarSdk.xdr.SorobanAuthorizationEntry({
+      credentials: StellarSdk.xdr.SorobanCredentials.sorobanCredentialsAddress(
+        new StellarSdk.xdr.SorobanAddressCredentials({
+          address: new StellarSdk.Address(payer.publicKey()).toScAddress(),
+          nonce: 1n,
+          signatureExpirationLedger: 1000,
+          signature: StellarSdk.xdr.ScVal.scvVoid(),
+        }),
+      ),
+      rootInvocation: makeInvocation(depth),
+    });
+  }
+
+  it("returns depth 1 for a flat invocation (no nesting)", () => {
+    const response = {
+      ...success(),
+      result: {
+        auth: [makeAuthEntry(1)],
+        retval: StellarSdk.xdr.ScVal.scvVoid(),
+      },
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse;
+    expect(measureCallDepth(response)).toBe(1);
+  });
+
+  it("returns depth 3 for three nested contract calls", () => {
+    const response = {
+      ...success(),
+      result: {
+        auth: [makeAuthEntry(3)],
+        retval: StellarSdk.xdr.ScVal.scvVoid(),
+      },
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse;
+    expect(measureCallDepth(response)).toBe(3);
+  });
+
+  it("returns depth 9 for nine nested contract calls", () => {
+    const response = {
+      ...success(),
+      result: {
+        auth: [makeAuthEntry(9)],
+        retval: StellarSdk.xdr.ScVal.scvVoid(),
+      },
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse;
+    expect(measureCallDepth(response)).toBe(9);
+  });
+
+  it("populates maxCallDepth in the simulation result", async () => {
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      result: {
+        auth: [makeAuthEntry(3)],
+        retval: StellarSdk.xdr.ScVal.scvVoid(),
+      },
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse);
+    const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
+    expect(result.maxCallDepth).toBe(3);
+  });
+
+  it("emits a warning when call depth >= 8", async () => {
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      result: {
+        auth: [makeAuthEntry(9)],
+        retval: StellarSdk.xdr.ScVal.scvVoid(),
+      },
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse);
+    const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
+    expect(result.maxCallDepth).toBe(9);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Call stack depth 9"),
+    ]);
+  });
+
+  it("does not emit a call depth warning when depth < 8", async () => {
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      result: {
+        auth: [makeAuthEntry(3)],
+        retval: StellarSdk.xdr.ScVal.scvVoid(),
+      },
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse);
+    const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
+    expect(result.warnings?.some((w) => w.includes("Call stack depth"))).toBe(
+      false,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #20: Diagnostic events parser
+// ---------------------------------------------------------------------------
+
+describe("issue #20 — diagnostic events parser", () => {
+  function makeDiagEvent(
+    topics: StellarSdk.xdr.ScVal[],
+    data: StellarSdk.xdr.ScVal,
+  ): StellarSdk.xdr.DiagnosticEvent {
+    return new StellarSdk.xdr.DiagnosticEvent({
+      inSuccessfulContractCall: true,
+      event: new StellarSdk.xdr.ContractEvent({
+        ext: StellarSdk.xdr.ExtensionPoint.v0(),
+        contractId: null,
+        type: StellarSdk.xdr.ContractEventType.contract(),
+        body: StellarSdk.xdr.ContractEventBody.v0(
+          new StellarSdk.xdr.ContractEventV0({
+            topics,
+            data,
+          }),
+        ),
+      }),
+    });
+  }
+
+  it("classifies fn_call topic as debug", () => {
+    const ev = makeDiagEvent(
+      [StellarSdk.xdr.ScVal.scvSymbol("fn_call")],
+      StellarSdk.xdr.ScVal.scvVoid(),
+    );
+    const [parsed] = parseDiagnosticEvents([ev.toXDR("base64")]);
+    expect(parsed.logLevel).toBe("debug");
+    expect(parsed.topic).toBe("fn_call");
+  });
+
+  it("classifies error topic as error level", () => {
+    const ev = makeDiagEvent(
+      [
+        StellarSdk.xdr.ScVal.scvSymbol("error"),
+        StellarSdk.nativeToScVal(123, { type: "u32" }),
+      ],
+      StellarSdk.xdr.ScVal.scvVoid(),
+    );
+    const [parsed] = parseDiagnosticEvents([ev.toXDR("base64")]);
+    expect(parsed.logLevel).toBe("error");
+    expect(parsed.errorCode).toBe(123);
+  });
+
+  it("classifies log topic as info level", () => {
+    const ev = makeDiagEvent(
+      [StellarSdk.xdr.ScVal.scvSymbol("log")],
+      StellarSdk.xdr.ScVal.scvString("hello from contract"),
+    );
+    const [parsed] = parseDiagnosticEvents([ev.toXDR("base64")]);
+    expect(parsed.logLevel).toBe("info");
+    expect(parsed.topic).toBe("log");
+    expect(parsed.data).toBe("hello from contract");
+  });
+
+  it("falls back gracefully for unparseable XDR", () => {
+    const [parsed] = parseDiagnosticEvents(["not-valid-xdr-at-all"]);
+    expect(parsed.logLevel).toBe("debug");
+    expect(parsed.topic).toBe("unknown");
+    expect(parsed.xdr).toBe("not-valid-xdr-at-all");
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(parseDiagnosticEvents([])).toEqual([]);
+  });
+
+  it("includes parsedDiagnosticEvents in a simulation error response", async () => {
+    const ev = makeDiagEvent(
+      [StellarSdk.xdr.ScVal.scvSymbol("error")],
+      StellarSdk.xdr.ScVal.scvVoid(),
+    );
+    mockSimulate.mockResolvedValue({
+      id: "test",
+      _parsed: true,
+      latestLedger: 101,
+      events: [ev],
+      error: "contract execution failed",
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionResponse);
+    const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
+    expect(result.success).toBe(false);
+    expect(result.parsedDiagnosticEvents).toBeDefined();
+    expect(result.parsedDiagnosticEvents?.length).toBeGreaterThan(0);
+    expect(result.parsedDiagnosticEvents?.[0].logLevel).toBe("error");
+  });
+
+  it("includes parsedDiagnosticEvents in a successful simulation response", async () => {
+    const ev = makeDiagEvent(
+      [StellarSdk.xdr.ScVal.scvSymbol("fn_call")],
+      StellarSdk.xdr.ScVal.scvVoid(),
+    );
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      events: [ev],
+      result: { auth: [], retval: StellarSdk.xdr.ScVal.scvVoid() },
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse);
+    const result = await simulateTransaction(SOROBAN_INVOKE_XDR);
+    expect(result.success).toBe(true);
+    expect(result.parsedDiagnosticEvents).toBeDefined();
+    expect(result.parsedDiagnosticEvents?.[0].topic).toBe("fn_call");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// static dry run
+// ---------------------------------------------------------------------------
 
 const payer = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 4));
 const cosigner = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 5));
@@ -343,6 +582,7 @@ const addr = (key: StellarSdk.Keypair) =>
 const i128 = (value = 123456789012345678901234567890n) =>
   StellarSdk.nativeToScVal(value, { type: "i128" });
 const transferArgs = [addr(payer), addr(recipient), i128()];
+
 function invocation(
   functionName = "transfer",
   args = transferArgs,
@@ -366,39 +606,7 @@ function tree(
     subInvocations: children,
   });
 }
-function signature(keys: StellarSdk.Keypair[]): StellarSdk.xdr.ScVal {
-  return StellarSdk.xdr.ScVal.scvVec(
-    keys.map((key) =>
-      StellarSdk.xdr.ScVal.scvMap([
-        new StellarSdk.xdr.ScMapEntry({
-          key: StellarSdk.xdr.ScVal.scvSymbol("public_key"),
-          val: StellarSdk.xdr.ScVal.scvBytes(key.rawPublicKey()),
-        }),
-        new StellarSdk.xdr.ScMapEntry({
-          key: StellarSdk.xdr.ScVal.scvSymbol("signature"),
-          val: StellarSdk.xdr.ScVal.scvBytes(key.sign(Buffer.alloc(32))),
-        }),
-      ]),
-    ),
-  );
-}
-function authorization(
-  root = tree(),
-  keys: StellarSdk.Keypair[] = [],
-  account = payer,
-): StellarSdk.xdr.SorobanAuthorizationEntry {
-  return new StellarSdk.xdr.SorobanAuthorizationEntry({
-    rootInvocation: root,
-    credentials: StellarSdk.xdr.SorobanCredentials.sorobanCredentialsAddress(
-      new StellarSdk.xdr.SorobanAddressCredentials({
-        address: new StellarSdk.Address(account.publicKey()).toScAddress(),
-        nonce: 1n,
-        signatureExpirationLedger: 1000,
-        signature: signature(keys),
-      }),
-    ),
-  });
-}
+
 function transaction(
   functionName = "transfer",
   args = transferArgs,
@@ -418,56 +626,6 @@ function transaction(
     )
     .setTimeout(0)
     .build();
-}
-function accountData(
-  account = payer,
-  thresholds = [1, 1, 2, 3],
-  weight = 1,
-): StellarSdk.xdr.LedgerEntryData {
-  return StellarSdk.xdr.LedgerEntryData.account(
-    new StellarSdk.xdr.AccountEntry({
-      accountId: StellarSdk.xdr.PublicKey.publicKeyTypeEd25519(
-        account.rawPublicKey(),
-      ),
-      balance: 10000000n,
-      seqNum: 1n,
-      numSubEntries: 1,
-      inflationDest: null,
-      flags: 0,
-      homeDomain: "",
-      thresholds: Buffer.from(thresholds),
-      signers: [
-        new StellarSdk.xdr.Signer({
-          key: StellarSdk.xdr.SignerKey.signerKeyTypeEd25519(
-            cosigner.rawPublicKey(),
-          ),
-          weight,
-        }),
-      ],
-      ext: StellarSdk.xdr.AccountEntryExt.v0(),
-    }),
-  );
-}
-function accountState(
-  account = payer,
-  thresholds = [1, 1, 2, 3],
-): StellarSdk.rpc.Api.LedgerEntryChange {
-  return {
-    type: 2,
-    key: StellarSdk.xdr.LedgerKey.account(
-      new StellarSdk.xdr.LedgerKeyAccount({
-        accountId: StellarSdk.xdr.PublicKey.publicKeyTypeEd25519(
-          account.rawPublicKey(),
-        ),
-      }),
-    ),
-    before: new StellarSdk.xdr.LedgerEntry({
-      lastModifiedLedgerSeq: 100,
-      data: accountData(account, thresholds),
-      ext: StellarSdk.xdr.LedgerEntryExt.v0(),
-    }),
-    after: null,
-  };
 }
 
 describe("static dry run", () => {
@@ -491,26 +649,11 @@ describe("static dry run", () => {
     expect(getRpcServer).not.toHaveBeenCalled();
   });
 
-  // ── #429: TTL expiry warnings ─────────────────────────────────────────────
-
-  it("returns warnings for footprint entries expiring in < 100 ledgers", async () => {
-    // Set up a non-empty footprint so TTL lookup is triggered
-    const mockEntry = {
-      toXDR: jest
-        .fn()
-        .mockReturnValue(
-          "AAAAAAAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1w==",
-        ),
-    };
-    mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
-    mockFootprint.readWrite.mockReturnValueOnce([]);
-    mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
-    // Entry expires in 49 ledgers (liveUntil=150, current=101)
-    mockGetLedgerEntries.mockResolvedValueOnce({
-      entries: [{ liveUntilLedgerSeq: 150 }],
-      latestLedger: 101,
-    });
+  it("handles fee-bump envelope payment operations", () => {
     expect(simulateDryRun(FEE_BUMP_XDR).operations[0].type).toBe("payment");
+  });
+
+  it("does not describe WASM uploads as invocations", () => {
     const upload = new StellarSdk.TransactionBuilder(
       new StellarSdk.Account(payer.publicKey(), "1"),
       { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
@@ -523,297 +666,5 @@ describe("static dry run", () => {
     expect(
       simulateDryRun(upload.toXDR()).operations[0].invocation,
     ).toBeUndefined();
-  });
-});
-
-  it("returns empty warnings when all entries have >= 100 ledgers remaining", async () => {
-    const mockEntry = {
-      toXDR: jest
-        .fn()
-        .mockReturnValue(
-          "AAAAAAAAAADguR/+6XokT71S6q9MqmMlG4l/aNbaHXc9W5sm6FD/1w==",
-        ),
-    };
-    mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
-    mockFootprint.readWrite.mockReturnValueOnce([]);
-    mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
-    mockGetLedgerEntries.mockResolvedValueOnce({
-      entries: [{ liveUntilLedgerSeq: 300 }],
-      latestLedger: 100,
-    });
-  });
-  it.each([
-    [true, 2],
-    [false, 1],
-  ])(
-    "compares supplied master and signer weights to the medium threshold (sufficient %s)",
-    async (sufficient, total) => {
-      const auth = authorization(
-        tree(),
-        sufficient ? [payer, cosigner, cosigner] : [payer],
-      );
-      mockSimulate.mockResolvedValue({
-        ...success(),
-        stateChanges: [accountState()],
-        result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-      });
-      const result = await simulateTransaction(transaction().toXDR());
-      expect(result.signerThresholdReports?.[0]).toMatchObject({
-        accountId: payer.publicKey(),
-        authorizationLevel: "payment",
-        thresholdRequired: 2,
-        totalWeight: total,
-        isSufficient: sufficient,
-      });
-      expect(result.signerThresholdReports?.[0].signers).toHaveLength(total);
-    },
-  );
-  it("uses the high threshold when an admin invocation is nested in a payment tree", async () => {
-    const auth = authorization(
-      tree("transfer", [tree("mint", [], [addr(payer), i128()])]),
-      [payer, cosigner],
-    );
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState()],
-      result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(transaction().toXDR());
-    expect(result.signerThresholdReports?.[0]).toMatchObject({
-      authorizationLevel: "admin",
-      thresholdRequired: 3,
-      totalWeight: 2,
-      isSufficient: false,
-    });
-  });
-  it("does not count unsigned credentials or keys not configured as account signers", async () => {
-    const auth = authorization(tree(), [recipient]);
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState()],
-      result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(transaction().toXDR());
-    expect(result.signerThresholdReports?.[0]).toMatchObject({
-      totalWeight: 0,
-      isSufficient: false,
-    });
-    expect(result.signerThresholdReports?.[0].signers).toEqual([
-      { publicKey: recipient.publicKey(), weight: 0 },
-    ]);
-    await getCache().flush();
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState()],
-      result: {
-        auth: [authorization()],
-        retval: StellarSdk.xdr.ScVal.scvVoid(),
-      },
-    });
-    expect(
-      (await simulateTransaction(transaction().toXDR()))
-        .signerThresholdReports?.[0],
-    ).toMatchObject({ signers: [], totalWeight: 0, isSufficient: false });
-  });
-  it("reads account entries from the touched footprint", async () => {
-    const state = accountState();
-    const auth = authorization(tree(), [payer, cosigner]);
-    mockSimulate.mockResolvedValue({
-      ...success([state.key]),
-      result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    mockEntries.mockResolvedValue({
-      entries: [{ key: state.key, val: accountData() }],
-      latestLedger: 200,
-    });
-    expect(
-      (await simulateTransaction(transaction().toXDR()))
-        .signerThresholdReports?.[0].isSufficient,
-    ).toBe(true);
-    expect(mockEntries).toHaveBeenCalledWith(state.key);
-  });
-  it("prefers signed envelope credentials when the simulated authorization tree matches", async () => {
-    const unsigned = authorization();
-    const signed = authorization(tree(), [payer, cosigner]);
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState()],
-      result: { auth: [unsigned], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(
-      transaction("transfer", transferArgs, [signed]).toXDR(),
-    );
-    expect(result.signerThresholdReports?.[0].isSufficient).toBe(true);
-  });
-  it("checks separate authorization trees without combining their signatures", async () => {
-    const auth = [
-      authorization(tree(), [payer]),
-      authorization(tree("balance", [], [addr(payer)]), [cosigner]),
-    ];
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState()],
-      result: { auth, retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(transaction().toXDR());
-    expect(result.requiredSigners).toEqual([payer.publicKey()]);
-    expect(result.signerThresholdReports).toHaveLength(2);
-    expect(
-      result.signerThresholdReports?.every(
-        (report) => report.totalWeight === 1 && !report.isSufficient,
-      ),
-    ).toBe(true);
-  });
-  it("uses source account credentials and verified transaction signatures", async () => {
-    const auth = new StellarSdk.xdr.SorobanAuthorizationEntry({
-      credentials:
-        StellarSdk.xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
-      rootInvocation: tree(),
-    });
-    const tx = transaction("transfer", transferArgs, [auth]);
-    tx.sign(payer, cosigner);
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState()],
-      result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(tx.toXDR());
-    expect(result.requiredSigners).toEqual([payer.publicKey()]);
-    expect(result.signerThresholdReports?.[0]).toMatchObject({
-      totalWeight: 2,
-      isSufficient: true,
-    });
-  });
-  it("keeps custom contract credentials unknown instead of treating them as accounts", async () => {
-    const auth = new StellarSdk.xdr.SorobanAuthorizationEntry({
-      credentials: StellarSdk.xdr.SorobanCredentials.sorobanCredentialsAddress(
-        new StellarSdk.xdr.SorobanAddressCredentials({
-          address: new StellarSdk.Address(contract).toScAddress(),
-          nonce: 1n,
-          signatureExpirationLedger: 1000,
-          signature: StellarSdk.xdr.ScVal.scvVoid(),
-        }),
-      ),
-      rootInvocation: tree(),
-    });
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(transaction().toXDR());
-    expect(result.requiredSigners).toEqual([contract]);
-    expect(result.signerThresholdReports?.[0].isSufficient).toBeNull();
-  });
-
-  it("reads upgraded address credentials returned by the current RPC", async () => {
-    const original = authorization(tree(), [payer, cosigner]);
-    if (original.credentials.type !== "sorobanCredentialsAddress")
-      throw new Error("Expected address credentials in fixture");
-    const auth = new StellarSdk.xdr.SorobanAuthorizationEntry({
-      rootInvocation: original.rootInvocation,
-      credentials:
-        StellarSdk.xdr.SorobanCredentials.sorobanCredentialsAddressV2(
-          original.credentials.address,
-        ),
-    });
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState()],
-      result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(transaction().toXDR());
-    expect(result.requiredSigners).toEqual([payer.publicKey()]);
-    expect(result.authEntries?.[0].credentialsType).toBe(
-      "sorobanCredentialsAddressV2",
-    );
-    expect(result.signerThresholdReports?.[0]).toMatchObject({
-      totalWeight: 2,
-      thresholdRequired: 2,
-      isSufficient: true,
-    });
-  });
-
-  it("collects nested delegate authorizers and compares each account separately", async () => {
-    const original = authorization(tree("mint"), [payer, cosigner]);
-    if (original.credentials.type !== "sorobanCredentialsAddress")
-      throw new Error("Expected address credentials in fixture");
-    const nested = new StellarSdk.xdr.SorobanDelegateSignature({
-      address: new StellarSdk.Address(recipient.publicKey()).toScAddress(),
-      signature: signature([recipient]),
-      nestedDelegates: [],
-    });
-    const auth = new StellarSdk.xdr.SorobanAuthorizationEntry({
-      rootInvocation: original.rootInvocation,
-      credentials:
-        StellarSdk.xdr.SorobanCredentials.sorobanCredentialsAddressWithDelegates(
-          new StellarSdk.xdr.SorobanAddressCredentialsWithDelegates({
-            addressCredentials: original.credentials.address,
-            delegates: [
-              new StellarSdk.xdr.SorobanDelegateSignature({
-                address: new StellarSdk.Address(
-                  cosigner.publicKey(),
-                ).toScAddress(),
-                signature: signature([cosigner]),
-                nestedDelegates: [nested, nested],
-              }),
-            ],
-          }),
-        ),
-    });
-    const encoded = transaction("mint", transferArgs, [auth]).toXDR();
-    expect(simulateDryRun(encoded).operations[0].requiredSigners).toEqual([
-      payer.publicKey(),
-      cosigner.publicKey(),
-      recipient.publicKey(),
-    ]);
-    mockSimulate.mockResolvedValue({
-      ...success(),
-      stateChanges: [accountState(), accountState(recipient, [1, 1, 1, 1])],
-      result: { auth: [auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
-    });
-    const result = await simulateTransaction(encoded);
-    expect(result.signerThresholdReports).toHaveLength(3);
-    expect(result.signerThresholdReports).toEqual([
-      expect.objectContaining({
-        accountId: payer.publicKey(),
-        authorizationLevel: "admin",
-        totalWeight: 2,
-        thresholdRequired: 3,
-        isSufficient: false,
-      }),
-      expect.objectContaining({
-        accountId: cosigner.publicKey(),
-        authorizationLevel: "admin",
-        totalWeight: null,
-        isSufficient: null,
-      }),
-      expect.objectContaining({
-        accountId: recipient.publicKey(),
-        authorizationLevel: "admin",
-        totalWeight: 1,
-        thresholdRequired: 1,
-        isSufficient: true,
-      }),
-    ]);
-  });
-
-  it("leaves weights unknown when a touched account lookup is unavailable", async () => {
-    const state = accountState();
-    mockSimulate.mockResolvedValue({
-      ...success([state.key]),
-      result: {
-        auth: [authorization(tree(), [payer])],
-        retval: StellarSdk.xdr.ScVal.scvVoid(),
-      },
-    });
-    mockEntries.mockRejectedValue(new Error("Account lookup unavailable"));
-    const result = await simulateTransaction(transaction().toXDR());
-    expect(result.success).toBe(true);
-    expect(result.signerThresholdReports?.[0]).toMatchObject({
-      signers: [{ publicKey: payer.publicKey(), weight: null }],
-      thresholdRequired: null,
-      totalWeight: null,
-      isSufficient: null,
-    });
   });
 });

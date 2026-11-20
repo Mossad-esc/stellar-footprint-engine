@@ -1,4 +1,10 @@
-import { LruMemoryCache, buildCacheKey } from "./cache";
+import * as StellarSdk from "@stellar/stellar-sdk";
+
+import {
+  LruMemoryCache,
+  buildCacheKey,
+  canonicalizeTransactionXdr,
+} from "./cache";
 
 jest.mock("ioredis");
 jest.mock("../middleware/metrics", () => ({
@@ -155,5 +161,117 @@ describe("buildCacheKey", () => {
   it("returns a 64-character hex SHA-256 string", () => {
     const key = buildCacheKey({ xdr: "abc" });
     expect(key).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #18: Canonical XDR normalization
+// ---------------------------------------------------------------------------
+
+describe("canonicalizeTransactionXdr", () => {
+  const kp = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 1));
+  const kp2 = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 2));
+  const contract = StellarSdk.Address.contract(Buffer.alloc(32, 7)).toString();
+
+  function makeTx(auth: StellarSdk.xdr.SorobanAuthorizationEntry[] = []) {
+    return new StellarSdk.TransactionBuilder(
+      new StellarSdk.Account(kp.publicKey(), "1"),
+      { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
+    )
+      .addOperation(
+        StellarSdk.Operation.invokeHostFunction({
+          func: StellarSdk.xdr.HostFunction.hostFunctionTypeInvokeContract(
+            new StellarSdk.xdr.InvokeContractArgs({
+              contractAddress: new StellarSdk.Address(contract).toScAddress(),
+              functionName: "transfer",
+              args: [],
+            }),
+          ),
+          auth,
+        }),
+      )
+      .setTimeout(0)
+      .build();
+  }
+
+  function makeAuthEntry(
+    key: StellarSdk.Keypair,
+    nonce: bigint = 1n,
+  ): StellarSdk.xdr.SorobanAuthorizationEntry {
+    return new StellarSdk.xdr.SorobanAuthorizationEntry({
+      credentials: StellarSdk.xdr.SorobanCredentials.sorobanCredentialsAddress(
+        new StellarSdk.xdr.SorobanAddressCredentials({
+          address: new StellarSdk.Address(key.publicKey()).toScAddress(),
+          nonce,
+          signatureExpirationLedger: 1000,
+          signature: StellarSdk.xdr.ScVal.scvVoid(),
+        }),
+      ),
+      rootInvocation: new StellarSdk.xdr.SorobanAuthorizedInvocation({
+        function:
+          StellarSdk.xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+            new StellarSdk.xdr.InvokeContractArgs({
+              contractAddress: new StellarSdk.Address(contract).toScAddress(),
+              functionName: "transfer",
+              args: [],
+            }),
+          ),
+        subInvocations: [],
+      }),
+    });
+  }
+
+  it("transactions identical except for outer signatures produce the same canonical XDR", () => {
+    const tx = makeTx();
+    const xdr1 = tx.toXDR();
+    const signed = makeTx();
+    signed.sign(kp);
+    const xdr2 = signed.toXDR();
+
+    expect(xdr1).not.toBe(xdr2);
+    expect(canonicalizeTransactionXdr(xdr1)).toBe(
+      canonicalizeTransactionXdr(xdr2),
+    );
+  });
+
+  it("transactions with different auth entry order produce the same canonical XDR", () => {
+    const auth1 = [makeAuthEntry(kp, 1n), makeAuthEntry(kp2, 2n)];
+    const auth2 = [makeAuthEntry(kp2, 2n), makeAuthEntry(kp, 1n)];
+
+    const xdr1 = makeTx(auth1).toXDR();
+    const xdr2 = makeTx(auth2).toXDR();
+
+    // Different XDRs due to auth order
+    expect(xdr1).not.toBe(xdr2);
+    // After canonicalization they should match
+    expect(canonicalizeTransactionXdr(xdr1)).toBe(
+      canonicalizeTransactionXdr(xdr2),
+    );
+  });
+
+  it("produces the same cache key for equivalent transactions", () => {
+    const tx = makeTx();
+    const signed = makeTx();
+    signed.sign(kp);
+
+    const key1 = buildCacheKey({ xdr: tx.toXDR(), network: "testnet" });
+    const key2 = buildCacheKey({ xdr: signed.toXDR(), network: "testnet" });
+    expect(key1).toBe(key2);
+  });
+
+  it("falls back gracefully for malformed XDR without throwing", () => {
+    expect(() => canonicalizeTransactionXdr("not-valid-xdr!!!")).not.toThrow();
+    expect(canonicalizeTransactionXdr("not-valid-xdr!!!")).toBe(
+      "not-valid-xdr!!!",
+    );
+  });
+
+  it("produces a cache key for malformed XDR without throwing", () => {
+    expect(() =>
+      buildCacheKey({ xdr: "bad-xdr", network: "testnet" }),
+    ).not.toThrow();
+    expect(buildCacheKey({ xdr: "bad-xdr", network: "testnet" })).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
   });
 });

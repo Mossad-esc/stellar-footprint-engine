@@ -20,13 +20,20 @@ export interface FootprintStats {
   isSAC: boolean;
   assetInfo?: AssetInfo;
   breakdown: FootprintBreakdown;
+  /** Count of temporary-durability contract data entries in the footprint. */
+  temporaryEntryCount: number;
+  /** Total byte size of temporary-durability keys. */
+  temporaryEntrySizeBytes: number;
+  /** Count of persistent-durability contract data entries in the footprint. */
+  persistentEntryCount: number;
+  /** Total byte size of persistent-durability keys. */
+  persistentEntrySizeBytes: number;
+  /** Optimization hint: set when any persistent entry could be temporary. */
+  persistentStorageOptimizationHint?: string;
 }
 
 export type StorageCategory =
-  | "contractCode"
-  | "contractInstance"
-  | "persistentData"
-  | "temporaryData";
+  "contractCode" | "contractInstance" | "persistentData" | "temporaryData";
 
 export interface StorageStats {
   count: number;
@@ -65,6 +72,20 @@ export interface ContractEvent {
   contractId: string;
   topics: string[];
   data: string;
+}
+
+/** Structured representation of a Soroban diagnostic event. */
+export interface DiagnosticEvent {
+  /** Categorized log level derived from event topic. */
+  logLevel: "debug" | "info" | "warn" | "error";
+  /** Human-readable topic name (e.g. "fn_call", "log", "error"). */
+  topic: string;
+  /** Decoded data payload as a JSON-serializable value. */
+  data: unknown;
+  /** Contract error code extracted from HostError panics, when present. */
+  errorCode?: number | string;
+  /** Raw base64 XDR of the original diagnostic event. */
+  xdr: string;
 }
 
 export interface ContractInvocation {
