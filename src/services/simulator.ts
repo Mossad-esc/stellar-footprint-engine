@@ -36,7 +36,10 @@ import {
 } from "../types";
 import { rpcCircuitBreaker } from "../utils/circuitBreaker";
 import { withRetry } from "../utils/retry";
-import { sanitizeRpcError } from "../utils/rpcErrorSanitizer";
+import {
+  sanitizeRpcError,
+  type SanitizedRpcError,
+} from "../utils/rpcErrorSanitizer";
 
 /** Match TTL records by ledger key hash, never by RPC response position. */
 function isTtlKey(key: StellarSdk.xdr.LedgerKey): boolean {
@@ -261,6 +264,9 @@ export interface SimulateResult {
   cacheHit?: boolean;
   type?: string;
   warnings?: string[];
+  // Resource limit exceeded fields
+  remediation?: string;
+  resourceExceeded?: "cpu_instructions" | "memory_bytes" | "footprint_entries";
 }
 
 /**
@@ -456,11 +462,19 @@ export async function simulateTransaction(
   }
 
   if (StellarSdk.rpc.Api.isSimulationError(response)) {
+    const sanitized: SanitizedRpcError = sanitizeRpcError(response.error);
+    // Determine specific error code based on resource exceeded
+    let errorCode = ErrorCode.RPC_SIMULATION_ERROR;
+    if (sanitized.resourceExceeded) {
+      errorCode = ErrorCode.RESOURCE_LIMIT_EXCEEDED;
+    }
     return {
       success: false,
       type: "simulation_error" as const,
-      error: sanitizeRpcError(response.error),
-      code: ErrorCode.RPC_SIMULATION_ERROR,
+      error: sanitized.message,
+      remediation: sanitized.remediation,
+      resourceExceeded: sanitized.resourceExceeded,
+      code: errorCode,
       raw: response,
     };
   }
