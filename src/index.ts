@@ -27,6 +27,19 @@ import { timeoutMiddleware } from "./middleware/timeout";
 import { logger } from "./utils/logger";
 
 const app = express();
+
+// Number of trusted reverse proxies / load balancers in front of the app.
+// Express then resolves req.ip from X-Forwarded-For safely (0 = ignore header).
+const trustedProxyCount = Number.parseInt(
+  process.env.TRUSTED_PROXY_COUNT ?? "0",
+  10,
+);
+app.set(
+  "trust proxy",
+  Number.isInteger(trustedProxyCount) && trustedProxyCount >= 0
+    ? trustedProxyCount
+    : 0,
+);
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const COMPRESSION_THRESHOLD = parseInt(
   process.env.COMPRESSION_THRESHOLD || "1024",
