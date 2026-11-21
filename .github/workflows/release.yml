@@ -39,3 +39,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+
+  smoke-test:
+    needs: build
+    if: ${{ vars.SMOKE_TEST_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run post-deployment smoke tests
+        env:
+          API_KEY: ${{ secrets.SMOKE_TEST_API_KEY }}
+        run: bash scripts/smoke-test.sh "${{ vars.SMOKE_TEST_URL }}"
