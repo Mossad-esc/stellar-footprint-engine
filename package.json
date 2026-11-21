@@ -84,7 +84,7 @@
     "jest": "^30.4.0",
     "lint-staged": "17.0.5",
     "prettier": "^3.8.3",
-    "solhint": "^6.2.1",
+    "solhint": "^6.2.5",
     "supertest": "^7.0.0",
     "tinybench": "^4.0.0",
     "ts-jest": "^29.4.9",
