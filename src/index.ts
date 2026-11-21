@@ -24,6 +24,8 @@ import { requestIdMiddleware } from "./middleware/requestId";
 import { requestLogger } from "./middleware/requestLogger";
 import { responseTimeMiddleware } from "./middleware/responseTime";
 import { timeoutMiddleware } from "./middleware/timeout";
+import { getCache } from "./services/cache";
+import { startCacheWarmer, stopCacheWarmer } from "./services/cacheWarmer";
 import { logger } from "./utils/logger";
 
 const app = express();
@@ -164,6 +166,11 @@ if (require.main === module) {
       },
       "stellar-footprint-service started",
     );
+
+    // Initialize cache and start warming
+    getCache();
+    const network = (process.env.NETWORK as "testnet" | "mainnet" | "futurenet") || "testnet";
+    startCacheWarmer(network);
   });
 
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
@@ -171,6 +178,7 @@ if (require.main === module) {
 
   const shutdown = (signal: string) => {
     logger.info(`${signal} received, shutting down gracefully`);
+    stopCacheWarmer();
     server.close(() => {
       logger.info("Server closed, exiting");
       process.exit(0);

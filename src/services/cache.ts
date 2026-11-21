@@ -1,11 +1,14 @@
 import { createHash } from "crypto";
+import { gzipSync, gunzipSync, brotliCompressSync, brotliDecompressSync } from "zlib";
 
 import metrics from "../middleware/metrics";
 import { logger } from "../utils/logger";
+import { env } from "../config/env";
 
 // ioredis is lazy-loaded only when REDIS_URL is present to avoid the ~40ms
 // module-parse cost during cold starts where Redis is not configured.
 type RedisClient = import("ioredis").default;
+type ClusterClient = import("ioredis").Cluster;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,7 +27,7 @@ export interface CacheService {
   delete(key: string): Promise<void>;
   flush(): Promise<void>;
   /** Which backend is currently active */
-  readonly backend: "redis" | "memory";
+  readonly backend: "redis" | "memory" | "cluster" | "sentinel";
   /** Whether stale-while-revalidate is enabled */
   readonly staleWhileRevalidate: boolean;
   /**
@@ -33,6 +36,10 @@ export interface CacheService {
    */
   getWithMeta<T>(key: string): Promise<{ value: T; isStale: boolean } | null>;
 }
+
+const COMPRESSION_PREFIX_GZIP = "__gz:";
+const COMPRESSION_PREFIX_BROTLI = "__br:";
+const COMPRESSION_THRESHOLD = env.CACHE_COMPRESSION_THRESHOLD;
 
 /** Milliseconds of the stale-while-revalidate window (from CACHE_SWR_MS env var) */
 export const CACHE_SWR_MS = parseInt(process.env.CACHE_SWR_MS ?? "0", 10) || 0;
@@ -103,6 +110,37 @@ export const idempotencyCache = new LruMemoryCache<string>(
   10_000,
   24 * 60 * 60 * 1000,
 );
+
+// ---------------------------------------------------------------------------
+// Compression utilities
+// ---------------------------------------------------------------------------
+
+function shouldCompress(data: string): boolean {
+  return env.CACHE_COMPRESSION_ENABLED && data.length > COMPRESSION_THRESHOLD;
+}
+
+function compressValue(value: string): string {
+  try {
+    // Use Brotli for better compression ratio, fallback to gzip
+    const compressed = brotliCompressSync(Buffer.from(value, "utf8"));
+    return COMPRESSION_PREFIX_BROTLI + compressed.toString("base64");
+  } catch {
+    const compressed = gzipSync(Buffer.from(value, "utf8"));
+    return COMPRESSION_PREFIX_GZIP + compressed.toString("base64");
+  }
+}
+
+function decompressValue(value: string): string {
+  if (value.startsWith(COMPRESSION_PREFIX_BROTLI)) {
+    const data = Buffer.from(value.slice(COMPRESSION_PREFIX_BROTLI.length), "base64");
+    return brotliDecompressSync(data).toString("utf8");
+  }
+  if (value.startsWith(COMPRESSION_PREFIX_GZIP)) {
+    const data = Buffer.from(value.slice(COMPRESSION_PREFIX_GZIP.length), "base64");
+    return gunzipSync(data).toString("utf8");
+  }
+  return value; // Uncompressed (backward compatible)
+}
 
 // ---------------------------------------------------------------------------
 // In-memory LRU cache (async CacheService implementation)
@@ -186,42 +224,56 @@ class AsyncLruMemoryCache implements CacheService {
 }
 
 // ---------------------------------------------------------------------------
-// Redis cache adapter
+// Redis cache adapter (standalone, sentinel, cluster)
 // ---------------------------------------------------------------------------
 
 class RedisCache implements CacheService {
-  readonly backend = "redis" as const;
+  readonly backend: "redis" | "cluster" | "sentinel";
   readonly staleWhileRevalidate: boolean;
 
   private readonly swrMs: number;
+  private readonly isCluster: boolean;
+  private readonly isSentinel: boolean;
 
   constructor(
-    private readonly client: RedisClient,
+    private readonly client: RedisClient | ClusterClient,
     swrMs = CACHE_SWR_MS,
+    backendType: "redis" | "cluster" | "sentinel" = "redis",
   ) {
     this.swrMs = swrMs;
     this.staleWhileRevalidate = swrMs > 0;
+    this.backend = backendType;
+    this.isCluster = backendType === "cluster";
+    this.isSentinel = backendType === "sentinel";
+  }
+
+  private async getClient(): Promise<RedisClient | ClusterClient> {
+    return this.client;
   }
 
   async get<T>(key: string): Promise<T | null> {
     const start = Date.now();
-    const raw = await this.client.get(key);
-    metrics.recordCacheLatency("get", "redis", (Date.now() - start) / 1000);
+    const client = await this.getClient();
+    const raw = await client.get(key);
+    metrics.recordCacheLatency("get", this.backend, (Date.now() - start) / 1000);
     if (raw === null) return null;
-    return JSON.parse(raw) as T;
+    const decompressed = decompressValue(raw);
+    return JSON.parse(decompressed) as T;
   }
 
   async getWithMeta<T>(
     key: string,
   ): Promise<{ value: T; isStale: boolean } | null> {
     const start = Date.now();
+    const client = await this.getClient();
     const [raw, ttlMs] = await Promise.all([
-      this.client.get(key),
-      this.client.pttl(key),
+      client.get(key),
+      client.pttl(key),
     ]);
-    metrics.recordCacheLatency("get", "redis", (Date.now() - start) / 1000);
+    metrics.recordCacheLatency("get", this.backend, (Date.now() - start) / 1000);
     if (raw === null) return null;
-    const value = JSON.parse(raw) as T;
+    const decompressed = decompressValue(raw);
+    const value = JSON.parse(decompressed) as T;
     const isStale =
       this.staleWhileRevalidate && ttlMs >= 0 && ttlMs < this.swrMs;
     return { value, isStale };
@@ -229,17 +281,31 @@ class RedisCache implements CacheService {
 
   async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
     const start = Date.now();
+    const client = await this.getClient();
+    const json = JSON.stringify(value);
+    const finalValue = shouldCompress(json) ? compressValue(json) : json;
     // PX = millisecond precision TTL
-    await this.client.set(key, JSON.stringify(value), "PX", ttlMs);
-    metrics.recordCacheLatency("set", "redis", (Date.now() - start) / 1000);
+    await client.set(key, finalValue, "PX", ttlMs);
+    metrics.recordCacheLatency("set", this.backend, (Date.now() - start) / 1000);
   }
 
   async delete(key: string): Promise<void> {
-    await this.client.del(key);
+    const client = await this.getClient();
+    await client.del(key);
   }
 
   async flush(): Promise<void> {
-    await this.client.flushdb();
+    const client = await this.getClient();
+    if (this.isCluster) {
+      // For cluster, flushall is not directly supported on all nodes
+      // Use SCAN + DEL pattern
+      const nodes = (client as ClusterClient).nodes("all");
+      for (const node of nodes) {
+        await node.flushdb();
+      }
+    } else {
+      await client.flushdb();
+    }
   }
 }
 
@@ -249,44 +315,116 @@ class RedisCache implements CacheService {
 
 let _cache: CacheService | null = null;
 
+function buildRedisClient(): RedisClient | ClusterClient | null {
+  const redisUrl = process.env.REDIS_URL;
+  const sentinelHosts = process.env.REDIS_SENTINEL_HOSTS;
+  const clusterNodes = process.env.REDIS_CLUSTER_NODES;
+
+  const Redis = require("ioredis") as typeof import("ioredis").default;
+
+  // Redis Sentinel configuration
+  if (sentinelHosts) {
+    const sentinels = sentinelHosts.split(",").map((host) => {
+      const [h, p] = host.trim().split(":");
+      return { host: h, port: parseInt(p || "26379", 10) };
+    });
+    const masterName = process.env.REDIS_SENTINEL_MASTER_NAME || "mymaster";
+    logger.info({ sentinels, masterName }, "Initializing Redis Sentinel client");
+    return new Redis({
+      sentinels,
+      name: masterName,
+      role: "master",
+      connectTimeout: 2000,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      lazyConnect: false,
+      retryStrategy: (times: number) => {
+        if (times > 10) return null;
+        return Math.min(times * 100, 3000);
+      },
+    });
+  }
+
+  // Redis Cluster configuration
+  if (clusterNodes) {
+    const nodes = clusterNodes.split(",").map((node) => {
+      const [h, p] = node.trim().split(":");
+      return { host: h, port: parseInt(p || "6379", 10) };
+    });
+    const maxRedirections = parseInt(process.env.REDIS_CLUSTER_MAX_REDIRECTIONS || "16", 10);
+    logger.info({ nodes }, "Initializing Redis Cluster client");
+    return new Redis.Cluster(nodes, {
+      maxRedirections,
+      connectTimeout: 2000,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      lazyConnect: false,
+      retryStrategy: (times: number) => {
+        if (times > 10) return null;
+        return Math.min(times * 100, 3000);
+      },
+    });
+  }
+
+  // Standalone Redis
+  if (redisUrl) {
+    logger.info({ url: redisUrl }, "Initializing standalone Redis client");
+    return new Redis(redisUrl, {
+      connectTimeout: 2000,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      lazyConnect: false,
+      retryStrategy: (times: number) => {
+        if (times > 10) return null;
+        return Math.min(times * 100, 3000);
+      },
+    });
+  }
+
+  return null;
+}
+
 export function getCache(): CacheService {
   if (_cache) return _cache;
 
-  const redisUrl = process.env.REDIS_URL;
+  const client = buildRedisClient();
 
-  if (redisUrl) {
+  if (client) {
     try {
-      const Redis = require("ioredis") as typeof import("ioredis").default;
-      const client = new Redis(redisUrl, {
-        connectTimeout: 3000,
-        maxRetriesPerRequest: 1,
-        enableOfflineQueue: false,
-        lazyConnect: false,
-      });
+      let backendType: "redis" | "cluster" | "sentinel" = "redis";
+      if (process.env.REDIS_SENTINEL_HOSTS) backendType = "sentinel";
+      else if (process.env.REDIS_CLUSTER_NODES) backendType = "cluster";
 
-      client.on("error", (err: Error) => {
-        logger.warn(
-          { err: err.message },
-          "Redis error — falling back to in-memory cache",
-        );
-        _cache = new AsyncLruMemoryCache();
-      });
+      const handleError = (err: Error) => {
+        logger.warn({ err: err.message, backend: backendType }, "Redis error — falling back to in-memory cache");
+        if (_cache && (_cache.backend === "redis" || _cache.backend === "cluster" || _cache.backend === "sentinel")) {
+          _cache = new AsyncLruMemoryCache();
+        }
+      };
 
-      client.on("connect", () => {
-        logger.info("Redis cache connected");
-      });
+      const handleConnect = () => {
+        logger.info({ backend: backendType }, `Redis ${backendType} cache connected`);
+      };
 
-      client.on("reconnecting", () => {
-        logger.warn("Redis reconnecting…");
-      });
+      const handleReconnecting = () => {
+        logger.warn({ backend: backendType }, `Redis ${backendType} reconnecting...`);
+      };
 
-      _cache = new RedisCache(client);
-      logger.info({ url: redisUrl }, "Cache backend: Redis");
+      client.on("error", handleError);
+      client.on("connect", handleConnect);
+      client.on("reconnecting", handleReconnecting);
+
+      // For cluster, also listen to node events
+      if (backendType === "cluster") {
+        const clusterClient = client as ClusterClient;
+        clusterClient.on("node error", handleError);
+        clusterClient.on("node connect", handleConnect);
+      }
+
+      _cache = new RedisCache(client, CACHE_SWR_MS, backendType);
+      logger.info({ backend: backendType }, `Cache backend: Redis ${backendType}`);
     } catch (err) {
-      logger.warn(
-        { err },
-        "Failed to initialise Redis — falling back to in-memory cache",
-      );
+      logger.warn({ err }, "Failed to initialise Redis — falling back to in-memory cache");
       _cache = new AsyncLruMemoryCache();
     }
   } else {
