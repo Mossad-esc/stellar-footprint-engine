@@ -91,7 +91,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ### Updating Jest snapshots
 
-Snapshot coverage in this repository is maintained through Jest snapshots. When an endpoint response shape intentionally changes, refresh the snapshots with:
+Snapshot coverage in this repository is maintained through Jest snapshots in `src/__tests__/responseShapes.test.ts`, covering API response envelopes (simulation success/error, restoration required, batch simulation, footprint diff, decode, fee estimation, health, and network status) as well as the parsed `openapi.yaml` specification. When an endpoint response shape or OpenAPI schema intentionally changes, refresh the snapshots with:
 
 ```bash
 pnpm test --updateSnapshot
