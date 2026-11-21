@@ -87,6 +87,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 | `pnpm run format` | Format code with Prettier |
 | `pnpm run format:check` | Check formatting without writing |
 | `pnpm test` | Run test suite |
+| `pnpm run test:mutation` | Run Stryker mutation tests on core footprint parser & optimizer |
 | `pnpm test --updateSnapshot` | Refresh Jest snapshots after intentional response shape changes |
 
 ### Updating Jest snapshots
@@ -158,6 +159,18 @@ docker compose -f docker-compose.test.yml down
 - `NETWORK_PASSPHRASE` — The network where contracts are deployed (e.g., `Test SDF Network ; September 2015`)
 
 These are used by tests in `src/__tests__/integration.test.ts` and `src/__tests__/simulate.integration.test.ts` to verify real API interactions.
+
+### Mutation Testing (Stryker)
+
+Line coverage does not guarantee assertion strength. We use [Stryker](https://stryker-mutator.io/) (`stryker.config.json`) to mutate conditionals, operators, and return values in `src/services/footprintParser.ts` and `src/services/optimizer.ts`:
+
+```bash
+pnpm run test:mutation
+```
+
+- **Thresholds** (`stryker.config.json`): `high: 80`, `low: 60`, `break: 50`.
+- **Reports**: Generated in `reports/mutation/html/index.html` and printed to the terminal (`clear-text`).
+- **Surviving mutants**: Inspect the HTML report for `Survived` mutants and tighten test assertions in `src/services/tests/footprintParser.test.ts` or `src/services/tests/optimizer.test.ts`.
 
 ### Unit Testing and Mocking
 

@@ -44,5 +44,14 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Verify Prometheus alerts
+        run: |
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v2.45.0 check rules /etc/prometheus/alerts.yml
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v2.45.0 test rules /etc/prometheus/alerts.test.yml
+
       - name: Audit
         run: pnpm audit --audit-level=high || true

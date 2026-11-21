@@ -1,0 +1,104 @@
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'rpc_circuit_breaker_state{network="mainnet"}'
+        values: "2 2 2"
+      - series: 'rpc_circuit_breaker_state{network="testnet"}'
+        values: "0 0 0"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: StellarRpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              network: mainnet
+            exp_annotations:
+              summary: "Stellar RPC circuit breaker is OPEN on mainnet"
+              description: >-
+                The RPC circuit breaker for network mainnet has tripped
+                to OPEN state for more than 30 seconds. Incoming simulation requests
+                are failing fast with 503 Service Unavailable.
+
+  - interval: 1m
+    input_series:
+      - series: 'simulate_requests_total{network="testnet",status="failure"}'
+        values: "0+2x10"
+      - series: 'simulate_requests_total{network="testnet",status="success"}'
+        values: "0+8x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighSimulationErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "High simulation error rate (> 5% over 5m)"
+              description: >-
+                Simulation failure rate is 20% over the
+                last 5 minutes, exceeding the 5% warning threshold.
+
+  - interval: 1m
+    input_series:
+      - series: 'simulate_duration_seconds_bucket{network="mainnet",le="0.5"}'
+        values: "0+0x10"
+      - series: 'simulate_duration_seconds_bucket{network="mainnet",le="1"}'
+        values: "0+0x10"
+      - series: 'simulate_duration_seconds_bucket{network="mainnet",le="2"}'
+        values: "0+0x10"
+      - series: 'simulate_duration_seconds_bucket{network="mainnet",le="5"}'
+        values: "0+10x10"
+      - series: 'simulate_duration_seconds_bucket{network="mainnet",le="+Inf"}'
+        values: "0+10x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StellarRpcHighLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              network: mainnet
+            exp_annotations:
+              summary: "Stellar RPC simulation p95 latency > 2s on mainnet"
+              description: >-
+                95th percentile simulation duration on mainnet has
+                exceeded 2 seconds (current value: 4.85s) for 5 minutes.
+
+  - interval: 1m
+    input_series:
+      - series: 'redis_up{instance="redis-exporter:9121"}'
+        values: "0 0 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: RedisCacheUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: redis-exporter:9121
+            exp_annotations:
+              summary: "Redis cache is unavailable"
+              description: >-
+                The Redis exporter reports redis_up == 0 for more than 1 minute.
+                L2 caching is degraded and requests are falling back to L1/RPC.
+
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{container="stellar-footprint-service"}'
+        values: "900 900 900 900 900 900 900"
+      - series: 'container_spec_memory_limit_bytes{container="stellar-footprint-service"}'
+        values: "1000 1000 1000 1000 1000 1000 1000"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HighMemoryUtilization
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              container: stellar-footprint-service
+            exp_annotations:
+              summary: "High container memory utilization (> 85%)"
+              description: >-
+                Container memory utilization for stellar-footprint-service is
+                90% (threshold: 85%) for 5 minutes.
