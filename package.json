@@ -36,8 +36,8 @@
     "test:coverage": "jest --coverage",
     "test:integration": "docker compose -f docker-compose.test.yml up -d && jest --testPathPattern='integration|simulate' && docker compose -f docker-compose.test.yml down",
     "prepare": "husky",
-    "load-test": "node scripts/load-test.js",
-    "benchmark": "ts-node -r tsconfig-paths/register scripts/benchmarks/parser.bench.ts"
+    "seed:testnet": "ts-node scripts/seed-testnet.ts",
+    "load-test": "node scripts/load-test.js"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^17.4.0",
@@ -75,6 +75,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import-x": "^4.16.2",
     "eslint-plugin-prettier": "^5.5.5",
+    "fast-check": "^3.23.2",
     "husky": "^9.1.7",
     "jest": "^30.4.0",
     "lint-staged": "17.0.5",
@@ -105,6 +106,9 @@
     "errorMsg": "Branch name must be: main | develop | live\nOr prefixed with: feature/ | fix/ | refactor/ | hotfix/ | release/ | conflict/ | chore/\nExample: feature/my-new-feature"
   },
   "pnpm": {
+    "auditConfig": {
+      "ignoreCves": []
+    },
     "overrides": {
       "axios": "^1.20.0",
       "body-parser": "^2.4.0",

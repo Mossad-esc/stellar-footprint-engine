@@ -131,3 +131,93 @@ export interface TtlExtensionRecommendation {
   entries: string[];
   restoreFirst: boolean;
 }
+
+export type Network = "mainnet" | "testnet" | "futurenet";
+
+export type XdrType = "transaction" | "operation" | "ledger_key" | "auth_entry";
+
+export type FeeOperationType = "invoke" | "restore" | "extend";
+
+export interface FootprintInput {
+  readOnly: string[];
+  readWrite: string[];
+}
+
+export interface FootprintDiffResult {
+  added: FootprintInput;
+  removed: FootprintInput;
+  unchanged: FootprintInput;
+}
+
+export interface FeeEstimate {
+  baseFee: string;
+  resourceFee: string;
+  totalFee: string;
+  feeInXLM: string;
+  operationType?: FeeOperationType;
+  breakdown?: {
+    baseFee: string;
+    writeFee: string;
+    refundableFee: string;
+    otherResourceFee: string;
+  };
+}
+
+export interface DecodeResult {
+  success: boolean;
+  type: XdrType;
+  decoded?: unknown;
+  error?: string;
+}
+
+export interface SimulationCost {
+  cpuInsns: string;
+  memBytes: string;
+  ttlExtension?: TtlExtensionRecommendation;
+}
+
+export interface SimulationEnvelope {
+  success: boolean;
+  simulatedAt?: string;
+  upgradedFromV0?: boolean;
+  footprint?: {
+    readOnly: unknown[];
+    readWrite: unknown[];
+    breakdown?: FootprintBreakdown;
+  };
+  contracts?: string[];
+  contractType?: ContractType;
+  isSAC?: boolean;
+  assetInfo?: AssetInfo;
+  sacContracts?: SacContract[];
+  ttl?: Record<string, TtlInfo>;
+  ttlWarnings?: string[];
+  optimized?: boolean;
+  rawFootprint?: FootprintInput;
+  footprintStats?: FootprintStats;
+  invocation?: ContractInvocation;
+  authEntries?: AuthEntry[];
+  events?: ContractEvent[];
+  cost?: SimulationCost;
+  resourceFee?: string;
+  error?: string;
+  code?: ErrorCode;
+  contractId?: string;
+  requiredSigners?: string[];
+  threshold?: number;
+  signerThresholdReports?: SignerThresholdReport[];
+  operations?: SimulationEnvelope[];
+  feeBump?: boolean;
+  diagnosticEvents?: string[];
+  cacheHit?: boolean;
+  type?: string;
+  warnings?: string[];
+}
+
+export interface BatchSimulationItem extends SimulationEnvelope {
+  index: number;
+}
+
+export interface BatchSimulationResponse {
+  results: BatchSimulationItem[];
+}
