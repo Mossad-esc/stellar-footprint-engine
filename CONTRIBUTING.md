@@ -88,6 +88,17 @@ Thank you for your interest in contributing! This guide covers everything you ne
 | `pnpm run format:check` | Check formatting without writing |
 | `pnpm test` | Run test suite |
 | `pnpm test --updateSnapshot` | Refresh Jest snapshots after intentional response shape changes |
+| `pnpm run seed:testnet` | Fund a Testnet account via Friendbot, deploy a mock token contract, and print test XDRs |
+
+### Seeding Testnet Contracts for Simulation Testing
+
+If you need fresh Testnet contract IDs and transaction XDRs for testing simulations locally, run:
+
+```bash
+pnpm run seed:testnet
+```
+
+Pass `--json` to output machine-readable JSON. The script creates and funds a random Testnet account via Friendbot, deploys a mock Stellar Asset Contract (`MOCK`), and prints the contract ID, deployment transaction XDR, and a sample invocation XDR.
 
 ### Updating Jest snapshots
 
@@ -216,6 +227,20 @@ Branch names must follow one of these patterns:
 
 - Protected: `main`, `develop`, `live`
 - Prefixed: `feature/`, `fix/`, `refactor/`, `hotfix/`, `release/`, `chore/`, `docs/`
+
+### Pre-push Hooks
+
+Husky runs fast verification checks before `git push` to prevent broken builds from reaching GitHub:
+
+- **Protected branch checks**: Restricts direct, delete, and force pushes to `main`
+- **TypeScript typecheck**: `pnpm run typecheck`
+- **Fast unit tests**: `pnpm test -- --testPathPattern='unit' --bail --passWithNoTests`
+
+If you need to bypass the pre-push hook in an urgent situation, use:
+
+```bash
+git push --no-verify
+```
 
 ---
 
