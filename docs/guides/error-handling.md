@@ -116,6 +116,8 @@ The request was well-formed and passed validation, but processing failed. The XD
 
 When you receive this error from `/simulate`, call `POST /api/v1/restore` with the same XDR to obtain a restoration transaction. Submit and confirm that transaction on-chain, then retry `/simulate`.
 
+For a complete walkthrough of TTLs, rent, and `LEDGER_ENTRY_RESTORATION_REQUIRED` recovery, see the [Soroban State Archival & Restoration Lifecycle Guide](./state-archival-and-restoration.md).
+
 ---
 
 ### 429 Too Many Requests

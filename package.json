@@ -36,9 +36,11 @@
     "test:coverage": "jest --coverage",
     "test:integration": "docker compose -f docker-compose.test.yml up -d && jest --testPathPattern='integration|simulate' && docker compose -f docker-compose.test.yml down",
     "prepare": "husky",
-    "load-test": "node scripts/load-test.js"
+    "load-test": "node scripts/load-test.js",
+    "repl": "ts-node -r tsconfig-paths/register scripts/repl.ts"
   },
   "dependencies": {
+    "@scalar/express-api-reference": "^0.8.0",
     "@stellar/stellar-sdk": "^17.4.0",
     "compression": "^1.8.2",
     "cors": "^2.8.5",

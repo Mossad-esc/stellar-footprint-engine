@@ -99,25 +99,67 @@ app.use(bruteForceMiddleware);
 app.use(contentTypeMiddleware);
 app.use(httpCacheMiddleware);
 
-// Swagger UI — development only
+// Interactive API Playground (Scalar UI) & Swagger UI — development only
 if (process.env.NODE_ENV !== "production") {
-  const swaggerUi =
-    require("swagger-ui-express") as typeof import("swagger-ui-express");
-
   const YAML = require("yaml") as { parse: (s: string) => unknown };
-
   const fs = require("fs") as typeof import("fs");
   const specPath = path.join(__dirname, "..", "openapi.yaml");
+
   if (fs.existsSync(specPath)) {
     const spec = YAML.parse(fs.readFileSync(specPath, "utf8")) as Record<
       string,
       unknown
     >;
-    const swaggerSetup = swaggerUi.setup(spec, {
-      customSiteTitle: "Stellar Footprint Service API",
+
+    const { apiReference } =
+      require("@scalar/express-api-reference") as typeof import("@scalar/express-api-reference");
+
+    // Relax CSP for the interactive API playground so Scalar assets and Testnet
+    // "Try It" requests work in non-production environments.
+    const docsCspMiddleware: express.RequestHandler = (_req, res, next) => {
+      res.setHeader(
+        "Content-Security-Policy",
+        [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+          "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
+          "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+          "img-src 'self' data: https:",
+          "connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://soroban-rpc.mainnet.stellar.gateway.fm",
+        ].join("; "),
+      );
+      next();
+    };
+
+    const scalarHandler = apiReference({
+      spec: { content: spec },
+      theme: "purple",
+      layout: "modern",
+      showSidebar: true,
+      defaultHttpClient: {
+        targetKey: "js",
+        clientKey: "fetch",
+      },
+      hiddenClients: [],
+      authentication: {
+        preferredSecurityScheme: "ApiKeyHeader",
+        apiKey: {
+          token: process.env.API_KEY || "testnet-demo-key",
+        },
+      },
+      metaData: {
+        title: "Stellar Footprint Service — Interactive API Playground",
+      },
+      customCss: `
+        @media (max-width: 768px) {
+          .scalar-api-reference { font-size: 14px; }
+          .scalar-card, pre, code { max-width: 100%; overflow-x: auto; }
+        }
+      `,
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (app as any).use("/api/docs", swaggerUi.serve, swaggerSetup);
+
+    app.use("/api/docs", docsCspMiddleware, scalarHandler);
+    app.use("/api/reference", docsCspMiddleware, scalarHandler);
   }
 }
 

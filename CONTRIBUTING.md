@@ -79,6 +79,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 | Script | Description |
 |---|---|
 | `pnpm run dev` | Start dev server with hot reload |
+| `pnpm run repl` | Launch interactive Node.js REPL with SDK, RPC client, parsers, fee estimator, and cache pre-loaded |
 | `pnpm run build` | Compile TypeScript |
 | `pnpm run typecheck` | Run TypeScript type checking without emitting files |
 | `pnpm run start` | Start production server |
