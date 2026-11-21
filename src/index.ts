@@ -16,6 +16,7 @@ import routes from "./api/routes";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { bruteForceMiddleware } from "./middleware/bruteForce";
 import { contentTypeMiddleware } from "./middleware/contentType";
+import { closeCounterStore } from "./middleware/counterStore";
 import { errorHandler } from "./middleware/errorHandler";
 import { httpCacheMiddleware } from "./middleware/httpCache";
 import { ipFilterMiddleware } from "./middleware/ipFilter";
@@ -24,6 +25,7 @@ import { requestIdMiddleware } from "./middleware/requestId";
 import { requestLogger } from "./middleware/requestLogger";
 import { responseTimeMiddleware } from "./middleware/responseTime";
 import { timeoutMiddleware } from "./middleware/timeout";
+import { closeCache } from "./services/cache";
 import { logger } from "./utils/logger";
 
 const app = express();
@@ -164,21 +166,42 @@ if (require.main === module) {
       },
       "stellar-footprint-service started",
     );
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
   });
 
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.headersTimeout = HEADERS_TIMEOUT_MS;
 
+  let isShuttingDown = false;
+
   const shutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     logger.info(`${signal} received, shutting down gracefully`);
-    server.close(() => {
-      logger.info("Server closed, exiting");
-      process.exit(0);
-    });
-    setTimeout(() => {
-      logger.warn("Forced exit after timeout");
+
+    const forceExitTimer = setTimeout(() => {
+      logger.warn("Forced exit after 10s shutdown timeout");
       process.exit(1);
-    }, 10_000).unref();
+    }, 10_000);
+    forceExitTimer.unref();
+
+    server.close(async (err) => {
+      clearTimeout(forceExitTimer);
+      if (err) {
+        logger.error({ err }, "Error closing HTTP server");
+      }
+
+      try {
+        await Promise.allSettled([closeCache(), closeCounterStore()]);
+        logger.info("Redis connections closed, exiting");
+      } catch (cleanupErr) {
+        logger.error({ err: cleanupErr }, "Error during shutdown cleanup");
+      }
+
+      process.exit(err ? 1 : 0);
+    });
   };
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));

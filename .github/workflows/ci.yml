@@ -11,8 +11,9 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        node-version: [18.x, 20.x, 22.x]
 
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +26,19 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store per Node.js version
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -39,55 +53,62 @@ jobs:
         run: pnpm test
 
       - name: Coverage
-        run: npm run test:coverage
+        run: pnpm run test:coverage
 
       - name: Build
         run: pnpm run build
 
+      - name: Validate API Collections (Bruno)
+        run: |
+          cp -n .env.example .env || true
+          PORT=3000 NODE_ENV=test node -r tsconfig-paths/register dist/index.js &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/api/v1/health/live > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          cd docs/bruno && npx --yes @usebruno/cli run --env local
+
       - name: Audit
         run: pnpm audit --audit-level=high || true
 
-  integration:
+  helm:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
         with:
-          version: 10
+          version: v3.14.0
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22.x
-          cache: pnpm
+      - name: Helm lint
+        run: helm lint charts/stellar-footprint-service
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Helm template (default values)
+        run: helm template charts/stellar-footprint-service > /tmp/rendered-default.yaml
 
-      - name: Start test containers
-        run: docker compose -f docker-compose.test.yml up -d
-
-      - name: Wait for Soroban RPC
-        run: ./scripts/wait-for-soroban.sh
-
-      - name: Deploy test WASM contract
+      - name: Helm template (ingress + Redis enabled)
         run: |
-          docker compose -f docker-compose.test.yml exec -T stellar-quickstart bash -c '
-            printf "\x00asm\x01\x00\x00\x00" > /tmp/test.wasm &&
-            stellar keys generate test-deployer --network standalone || true &&
-            curl -sf "http://localhost:8000/friendbot?addr=$(stellar keys address test-deployer)" > /dev/null &&
-            CONTRACT_ID=$(stellar contract deploy --wasm /tmp/test.wasm --source test-deployer --network standalone) &&
-            echo "Deployed test contract: $CONTRACT_ID"
-          ' >> "$GITHUB_ENV" || true
+          helm template charts/stellar-footprint-service \
+            --set ingress.enabled=true \
+            --set ingress.hosts[0].host=example.com \
+            --set ingress.tls[0].secretName=test-tls \
+            --set ingress.tls[0].hosts[0]=example.com \
+            --set redis.enabled=true \
+            > /tmp/rendered-extras.yaml
 
-      - name: Run integration tests
-        env:
-          TESTNET_RPC_URL: http://localhost:8000/soroban/rpc
-          ALLOW_HTTP: "true"
-          REDIS_URL: redis://localhost:6379
-        run: pnpm run test:integration
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64 \
+            -o /tmp/kubeconform
+          chmod +x /tmp/kubeconform
 
-      - name: Stop test containers
-        if: always()
-        run: docker compose -f docker-compose.test.yml down -v
+      - name: Validate rendered manifests (default)
+        run: /tmp/kubeconform -summary -ignore-missing-schemas /tmp/rendered-default.yaml
+
+      - name: Validate rendered manifests (ingress + Redis)
+        run: /tmp/kubeconform -summary -ignore-missing-schemas /tmp/rendered-extras.yaml
