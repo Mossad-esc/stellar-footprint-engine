@@ -89,13 +89,20 @@ export interface AuthorizationInvocation {
   subInvocations: AuthorizationInvocation[];
 }
 
+export interface SignerWeight {
+  /** Ed25519 public key (G...) of a supplied signer. */
+  publicKey: string;
+  /** Weight from the account entry; null when account data is unavailable. */
+  weight: number | null;
+}
+
 export interface SignerThresholdReport {
   /** Reports are per tree, so signatures for different payloads cannot be combined. */
   invocationXdr: string;
   accountId: string;
   authorizationLevel: AuthorizationLevel;
   /** Each supplied signer appears once. Missing account data means unknown weight. */
-  signers: { publicKey: string; weight: number | null }[];
+  signers: SignerWeight[];
   thresholdRequired: number | null;
   totalWeight: number | null;
   /** Weight comparison only; custom contract authorization cannot be checked locally. */
