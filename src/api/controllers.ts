@@ -986,6 +986,110 @@ export function getSimulateHistory(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #24 — Server-Sent Events endpoint for real-time batch simulation status
+// ---------------------------------------------------------------------------
+
+const SSE_PING_INTERVAL_MS = 15_000;
+
+export async function simulateBatchStream(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  // Parse XDRs from query parameter: comma-separated string or JSON array.
+  const rawXdrs = req.query.xdrs as string | undefined;
+  let xdrs: string[] = [];
+
+  if (rawXdrs) {
+    try {
+      const parsed = JSON.parse(rawXdrs);
+      if (Array.isArray(parsed)) {
+        xdrs = parsed.map(String);
+      } else {
+        xdrs = rawXdrs
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      xdrs = rawXdrs
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+  }
+
+  const networkParam = (req.query.network as string) || DEFAULT_NETWORK;
+  const network: Network = (networkParam as Network) || DEFAULT_NETWORK;
+
+  // Set SSE headers before writing any data.
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const send = (event: string, data: unknown): void => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // Keep-alive ping every 15 seconds.
+  const pingInterval = setInterval(() => {
+    res.write(": ping\n\n");
+  }, SSE_PING_INTERVAL_MS);
+
+  const cleanup = (): void => {
+    clearInterval(pingInterval);
+  };
+
+  req.on("close", cleanup);
+
+  const total = xdrs.length;
+
+  if (total === 0) {
+    send("complete", { total: 0, message: "No XDRs provided" });
+    cleanup();
+    res.end();
+    return;
+  }
+
+  for (let index = 0; index < total; index++) {
+    const xdr = xdrs[index];
+
+    // Emit progress before simulating.
+    send("progress", { index, total, status: "simulating" });
+
+    try {
+      const result = await simulateTransaction(
+        xdr,
+        network,
+        res.locals.abortSignal,
+      );
+
+      send("result", {
+        index,
+        success: result.success,
+        footprint: result.success ? result.footprint : null,
+        cost: result.success ? result.cost : null,
+        error: result.success ? undefined : result.error,
+      });
+    } catch (err: unknown) {
+      send("result", {
+        index,
+        success: false,
+        footprint: null,
+        cost: null,
+        error:
+          err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR,
+      });
+    }
+  }
+
+  send("complete", { total, message: "Batch simulation finished" });
+  cleanup();
+  res.end();
+}
+
 export function getSimulationJob(
   req: Request,
   res: Response,
