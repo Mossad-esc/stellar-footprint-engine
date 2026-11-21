@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^17.4.0",
-    "commander": "^12.1.0",
+    "commander": "^15.1.0",
     "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
