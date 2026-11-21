@@ -241,6 +241,14 @@ class RedisCache implements CacheService {
   async flush(): Promise<void> {
     await this.client.flushdb();
   }
+
+  async close(): Promise<void> {
+    try {
+      await this.client.quit();
+    } catch {
+      this.client.disconnect();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +311,16 @@ export function getCache(): CacheService {
  */
 export function setCache(instance: CacheService): void {
   _cache = instance;
+}
+
+/**
+ * Gracefully close the active cache backend (e.g. Redis socket) on shutdown.
+ */
+export async function closeCache(): Promise<void> {
+  if (_cache instanceof RedisCache) {
+    await _cache.close();
+  }
+  _cache = null;
 }
 
 // ---------------------------------------------------------------------------
