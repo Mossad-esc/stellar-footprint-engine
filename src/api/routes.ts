@@ -1,11 +1,17 @@
 import { Router } from "express";
 
 import {
+  simulateRateLimiter,
+  decodeRateLimiter,
+  feeRateLimiter,
+} from "../middleware/rateLimiter";
+import {
   health,
   liveness,
   readiness,
   simulate,
   simulateBatch,
+  simulateBatchStream,
   getSimulationJob,
   footprintDiffController,
   validate,
@@ -20,11 +26,6 @@ import {
   simulateDryRun,
   getSimulateHistory,
 } from "./controllers";
-import {
-  simulateRateLimiter,
-  decodeRateLimiter,
-  feeRateLimiter,
-} from "../middleware/rateLimiter";
 
 const router = Router();
 
@@ -54,6 +55,9 @@ router.get("/simulate/jobs/:jobId", getSimulationJob);
 
 // POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
 router.post("/simulate/batch", simulateBatch);
+
+// GET /simulate/batch/stream — SSE endpoint for real-time batch simulation status
+router.get("/simulate/batch/stream", simulateBatchStream);
 
 // GET /simulate/cost-breakdown — accepts ?cpuInsns=&memBytes=&network= and returns detailed cost breakdown
 router.get("/simulate/cost-breakdown", costBreakdownController);
