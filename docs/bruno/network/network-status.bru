@@ -1,0 +1,21 @@
+meta {
+  name: Network Status
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/network/status?network={{network}}
+  body: none
+  auth: none
+}
+
+params:query {
+  network: {{network}}
+}
+
+tests {
+  test("should return network status", function () {
+    expect([200, 502, 503]).to.include(res.getStatus());
+  });
+}
