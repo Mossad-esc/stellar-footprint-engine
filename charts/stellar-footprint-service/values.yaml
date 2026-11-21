@@ -1,0 +1,205 @@
+# Stellar Footprint Service — Helm Chart Values
+# ==============================================
+# All values correspond to the zod-validated env schema in src/config/env.ts.
+# Setting a present-but-invalid value (e.g. LOG_LEVEL=verbose) will crash-loop
+# the pod in production because validateEnv() calls process.exit(1).
+
+# -- Number of replicas (ignored when autoscaling.enabled is true)
+replicaCount: 2
+
+# Container image
+image:
+  repository: stellar-footprint-service
+  # -- Image tag; defaults to .Chart.AppVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Override the chart name
+nameOverride: ""
+# -- Override the fully-qualified release name
+fullnameOverride: ""
+
+# Service account
+serviceAccount:
+  # -- Create a dedicated ServiceAccount
+  create: true
+  # -- Annotations to add to the ServiceAccount
+  annotations: {}
+  # -- ServiceAccount name; defaults to the chart fullname
+  name: ""
+  # -- Automount ServiceAccount token
+  automount: false
+
+# -- Annotations to add to pods
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3000"
+  prometheus.io/path: "/metrics"
+
+# -- Additional labels to add to pods
+podLabels: {}
+
+# Pod-level security context (matches Dockerfile non-root user 1001)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+
+# Service configuration
+service:
+  type: ClusterIP
+  # -- Port exposed by the Service
+  port: 80
+  # -- Container port the app listens on
+  targetPort: 3000
+
+# Ingress configuration (with cert-manager TLS annotations)
+ingress:
+  # -- Enable ingress
+  enabled: false
+  # -- Ingress class name
+  className: nginx
+  # -- Annotations (cert-manager cluster-issuer by default)
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: stellar-footprint.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration
+  tls: []
+  # tls:
+  #   - secretName: stellar-footprint-tls
+  #     hosts:
+  #       - stellar-footprint.local
+
+# Resource requests and limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Liveness probe (direct path avoids 308 redirect)
+livenessProbe:
+  httpGet:
+    path: /api/v1/health/live
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Readiness probe (checks Redis/circuit-breaker state)
+readinessProbe:
+  httpGet:
+    path: /api/v1/health/ready
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  # -- Enable HPA
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  # -- Target CPU utilization percentage
+  targetCPUUtilizationPercentage: 70
+  # -- Target memory utilization percentage (leave unset to disable)
+  targetMemoryUtilizationPercentage: ""
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  # -- Enable PDB
+  enabled: true
+  # -- Minimum available pods during disruptions
+  minAvailable: 1
+
+# Network Policy
+networkPolicy:
+  # -- Enable NetworkPolicy (restricts ingress + egress)
+  enabled: true
+  # -- Namespace where the ingress controller runs
+  ingressNamespace: ingress-nginx
+  # -- Ingress controller label value
+  ingressController: ingress-nginx
+
+# Non-sensitive application configuration (loaded via ConfigMap).
+# These names match the zod-validated schema in src/config/env.ts.
+config:
+  NODE_ENV: production
+  PORT: "3000"
+  LOG_LEVEL: info
+  NETWORK: testnet
+  SIMULATE_TIMEOUT_MS: "30000"
+  COMPRESSION_THRESHOLD: "1024"
+  RPC_POOL_TTL_MS: "300000"
+  CACHE_TTL_SECONDS: "60"
+  CACHE_MAX_SIZE: "500"
+  RATE_LIMIT_MAX: "60"
+  RATE_LIMIT_WINDOW_MS: "60000"
+  DECODE_RATE_LIMIT_MAX: "120"
+  DECODE_RATE_LIMIT_WINDOW_MS: "60000"
+  FEE_RATE_LIMIT_MAX: "60"
+  FEE_RATE_LIMIT_WINDOW_MS: "60000"
+  BATCH_CONCURRENCY: "5"
+  NETWORK_STATUS_TTL_MS: "10000"
+  KEEP_ALIVE_TIMEOUT_MS: "65000"
+  HEADERS_TIMEOUT_MS: "66000"
+
+# Redis cache backend (optional — in-memory fallback when disabled)
+redis:
+  # -- Enable Redis (sets REDIS_URL env var and allows egress)
+  enabled: false
+  host: redis
+  port: 6379
+  # -- Override the full REDIS_URL (takes precedence over host/port)
+  url: ""
+
+# Sensitive configuration (loaded via Secret).
+# Provide real values via --set or a separate values file.
+# For production, prefer Sealed Secrets, External Secrets, or a vault.
+secrets:
+  TESTNET_RPC_URL: "https://soroban-testnet.stellar.org"
+  MAINNET_RPC_URL: "https://mainnet.stellar.validationcloud.io/v1/placeholder"
+  FUTURENET_RPC_URL: "https://rpc-futurenet.stellar.org:443"
+  TESTNET_SECRET_KEY: ""
+  MAINNET_SECRET_KEY: ""
+  FUTURENET_SECRET_KEY: ""
+  # -- Comma-separated API keys; enables API key auth when set
+  API_KEYS: ""
+
+# -- Additional environment variables (applied as individual env entries)
+extraEnv: []
+
+# -- Additional envFrom sources
+extraEnvFrom: []
+
+# -- Additional volumes
+volumes: []
+
+# -- Additional volume mounts
+volumeMounts: []
+
+# Node selector, tolerations, affinity
+nodeSelector: {}
+tolerations: []
+affinity: {}

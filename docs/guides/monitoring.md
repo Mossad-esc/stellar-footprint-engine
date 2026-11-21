@@ -161,65 +161,28 @@ The dashboard includes panels for: request rate, error rate, P50/P95/P99 latency
 
 ---
 
-## Alerting Recommendations
+## Alerting Rules (`monitoring/prometheus/alerts.yml`)
 
-Add these alert rules to Prometheus (`prometheus.yml` → `rule_files`):
+Production alert rules are defined in `monitoring/prometheus/alerts.yml` and loaded by `monitoring/prometheus.yml` via `rule_files`:
 
-```yaml
-groups:
-  - name: stellar-footprint-service
-    rules:
-      - alert: HighErrorRate
-        expr: |
-          (
-            rate(http_requests_total{job="stellar-footprint-service", status_code=~"5.."}[5m])
-            / rate(http_requests_total{job="stellar-footprint-service"}[5m])
-          ) > 0.05
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Error rate > 5% for 2 minutes"
+| Alert | Severity | Condition | `for` |
+|---|---|---|---|
+| `StellarRpcCircuitBreakerOpen` | `critical` | `rpc_circuit_breaker_state == 2` | `30s` |
+| `HighSimulationErrorRate` | `warning` | Simulation failure rate > 5% over 5m | `5m` |
+| `StellarRpcHighLatency` | `warning` | `simulate_duration_seconds_bucket` p95 > 2s over 5m | `5m` |
+| `RedisCacheUnavailable` | `critical` | `redis_up == 0` | `1m` |
+| `HighMemoryUtilization` | `warning` | Container memory working set / limit > 85% | `5m` |
 
-      - alert: HighLatencyP95
-        expr: |
-          histogram_quantile(
-            0.95,
-            rate(http_request_duration_seconds_bucket{job="stellar-footprint-service"}[5m])
-          ) > 1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "P95 latency > 1 s for 5 minutes"
+### Validating and Unit Testing Alerts
 
-      - alert: LowCacheHitRate
-        expr: |
-          (
-            rate(cache_hits_total[5m])
-            / (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m]))
-          ) < 0.5
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Cache hit rate below 50% for 10 minutes"
+Prometheus alert rules are verified in CI using `promtool` against unit tests in `monitoring/prometheus/alerts.test.yml`:
 
-      - alert: RpcErrorSpike
-        expr: rate(rpc_errors_total[5m]) > 1
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "RPC error rate > 1/s — circuit breaker may open"
+```bash
+# Syntax check
+promtool check rules monitoring/prometheus/alerts.yml
 
-      - alert: ServiceDown
-        expr: up{job="stellar-footprint-service"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Stellar Footprint Service is unreachable"
+# Run unit tests
+promtool test rules monitoring/prometheus/alerts.test.yml
 ```
 
 ---

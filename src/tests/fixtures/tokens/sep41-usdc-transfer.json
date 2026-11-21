@@ -1,0 +1,18 @@
+{
+  "name": "sep41-usdc-transfer",
+  "protocol": "SEP-41 Token (USDC)",
+  "operation": "transfer",
+  "contractId": "CAKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBJRD5",
+  "functionName": "transfer",
+  "network": "testnet",
+  "simulateTransaction": {
+    "transactionData": "AAAAAAAAAAEAAAAGAAAAARQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUAAAAFAAAAAEAAAABAAAABgAAAAEUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFAAAAA8AAAAHQmFsYW5jZQAAAAABAATEggAABmgAAAHgAAAAAAAASdQ=",
+    "minResourceFee": "18900",
+    "cost": {
+      "cpuInsns": "312450",
+      "memBytes": "1640"
+    },
+    "events": [],
+    "latestLedger": 1245805
+  }
+}

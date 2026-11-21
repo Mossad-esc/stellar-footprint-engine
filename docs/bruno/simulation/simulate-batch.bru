@@ -1,0 +1,29 @@
+meta {
+  name: Simulate Batch
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/simulate/batch
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "transactions": [
+      {
+        "xdr": "{{sampleTxXdr}}"
+      }
+    ],
+    "network": "{{network}}"
+  }
+}
+
+tests {
+  test("should return 200 OK with results array", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().results).to.be.an("array");
+  });
+}

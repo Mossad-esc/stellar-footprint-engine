@@ -16,6 +16,10 @@ jest.mock("@services/feeEstimator", () => ({
   estimateFeeDetailed: jest.fn(),
 }));
 
+jest.mock("@services/restorer", () => ({
+  buildRestoreTransaction: jest.fn(),
+}));
+
 jest.mock("@middleware/metrics", () => ({
   __esModule: true,
   default: {
@@ -43,11 +47,16 @@ jest.mock("@middleware/metrics", () => ({
   },
 }));
 
+import fs from "fs";
+import path from "path";
+
 import { decodeXdr } from "@services/decoder";
 import { estimateFee } from "@services/feeEstimator";
 import { getNetworkStatus } from "@services/networkStatus";
+import { buildRestoreTransaction } from "@services/restorer";
 import { simulateTransaction } from "@services/simulator";
 import request from "supertest";
+import YAML from "yaml";
 
 import app from "../index";
 import { SOROBAN_INVOKE_XDR } from "../tests/fixtures/xdr";
@@ -60,6 +69,10 @@ const mockGetNetworkStatus = getNetworkStatus as jest.MockedFunction<
 >;
 const mockDecodeXdr = decodeXdr as jest.MockedFunction<typeof decodeXdr>;
 const mockEstimateFee = estimateFee as jest.MockedFunction<typeof estimateFee>;
+const mockBuildRestoreTransaction =
+  buildRestoreTransaction as jest.MockedFunction<
+    typeof buildRestoreTransaction
+  >;
 
 const MOCK_SIMULATION_SUCCESS = {
   success: true,
@@ -85,6 +98,45 @@ const MOCK_SIMULATION_SUCCESS = {
 const MOCK_SIMULATION_ERROR = {
   success: false,
   error: "contract panic: assertion failed",
+};
+
+const MOCK_RESTORATION_REQUIRED = {
+  success: false,
+  type: "restoration_required" as const,
+  error: "Transaction requires ledger entry restoration before simulation.",
+  code: "SIMULATION_RESTORE_REQUIRED",
+  ttl: [
+    {
+      key: "AAAABgAAAAAAA",
+      liveUntilLedgerSeq: 1000,
+      status: "expired",
+    },
+  ],
+  ttlWarnings: [
+    {
+      key: "AAAABgAAAAAAA",
+      message: "Ledger entry expired and requires restoration",
+    },
+  ],
+  warnings: [
+    {
+      key: "AAAABgAAAAAAA",
+      message: "Ledger entry expired and requires restoration",
+    },
+  ],
+  cost: {
+    cpuInsns: "0",
+    memBytes: "0",
+    ttlExtension: {
+      recommendedExtendTo: 50000,
+    },
+  },
+};
+
+const MOCK_RESTORE_RESPONSE = {
+  needsRestore: true,
+  restoreXdr: "AAAAAgAAArestore==",
+  fee: "100",
 };
 
 const MOCK_DECODE_RESULT = {
@@ -123,6 +175,7 @@ beforeEach(() => {
   } as never);
   mockDecodeXdr.mockReturnValue(MOCK_DECODE_RESULT as never);
   mockEstimateFee.mockResolvedValue(MOCK_FEE_ESTIMATE as never);
+  mockBuildRestoreTransaction.mockResolvedValue(MOCK_RESTORE_RESPONSE as never);
 });
 
 afterEach(() => {
@@ -262,5 +315,199 @@ describe("endpoint response shape snapshots", () => {
         "totalFee": "350",
       }
     `);
+  });
+
+  it("captures /simulate validation error response envelope (400)", async () => {
+    const response = await request(app)
+      .post("/api/v1/simulate")
+      .send({ network: "testnet" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchInlineSnapshot(
+      {
+        requestId: expect.any(String),
+      },
+      `
+      {
+        "code": "INVALID_XDR",
+        "error": "Missing required field: xdr",
+        "requestId": Any<String>,
+        "success": false,
+      }
+    `,
+    );
+  });
+
+  it("captures restoration_required /simulate response shape", async () => {
+    mockSimulateTransaction.mockResolvedValueOnce(
+      MOCK_RESTORATION_REQUIRED as never,
+    );
+
+    const response = await request(app)
+      .post("/api/v1/simulate")
+      .send({ xdr: SOROBAN_INVOKE_XDR, network: "testnet" });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toMatchInlineSnapshot(`
+      {
+        "code": "SIMULATION_RESTORE_REQUIRED",
+        "cost": {
+          "cpuInsns": "0",
+          "memBytes": "0",
+          "ttlExtension": {
+            "recommendedExtendTo": 50000,
+          },
+        },
+        "error": "Transaction requires ledger entry restoration before simulation.",
+        "success": false,
+        "ttl": [
+          {
+            "key": "AAAABgAAAAAAA",
+            "liveUntilLedgerSeq": 1000,
+            "status": "expired",
+          },
+        ],
+        "ttlWarnings": [
+          {
+            "key": "AAAABgAAAAAAA",
+            "message": "Ledger entry expired and requires restoration",
+          },
+        ],
+        "type": "restoration_required",
+        "warnings": [
+          {
+            "key": "AAAABgAAAAAAA",
+            "message": "Ledger entry expired and requires restoration",
+          },
+        ],
+      }
+    `);
+  });
+
+  it("captures /restore response envelope", async () => {
+    const response = await request(app)
+      .post("/api/v1/restore")
+      .send({ xdr: SOROBAN_INVOKE_XDR, network: "testnet" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchInlineSnapshot(`
+      {
+        "data": {
+          "fee": "100",
+          "needsRestore": true,
+          "restoreXdr": "AAAAAgAAArestore==",
+        },
+        "success": true,
+      }
+    `);
+  });
+
+  it("captures /simulate/batch response envelope", async () => {
+    mockSimulateTransaction
+      .mockResolvedValueOnce(MOCK_SIMULATION_SUCCESS as never)
+      .mockResolvedValueOnce(MOCK_SIMULATION_ERROR as never);
+
+    const response = await request(app)
+      .post("/api/v1/simulate/batch")
+      .send({
+        transactions: [{ xdr: SOROBAN_INVOKE_XDR }, { xdr: SOROBAN_INVOKE_XDR }],
+        network: "testnet",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchInlineSnapshot(`
+      {
+        "results": [
+          {
+            "cacheHit": false,
+            "contractType": "token",
+            "contracts": [
+              "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ],
+            "cost": {
+              "cpuInsns": "123456",
+              "memBytes": "4096",
+            },
+            "footprint": {
+              "readOnly": [
+                "AAAABgAAAAAAA",
+              ],
+              "readWrite": [
+                "AAAABgAAAAAAB",
+              ],
+            },
+            "index": 0,
+            "optimized": true,
+            "rawFootprint": {
+              "readOnly": [
+                "AAAABgAAAAAAA",
+              ],
+              "readWrite": [
+                "AAAABgAAAAAAB",
+              ],
+            },
+            "success": true,
+            "ttl": {
+              "liveUntilLedgerSeq": 12345,
+            },
+          },
+          {
+            "error": "contract panic: assertion failed",
+            "index": 1,
+            "success": false,
+          },
+        ],
+      }
+    `);
+  });
+
+  it("captures /footprint/diff response envelope", async () => {
+    const response = await request(app)
+      .post("/api/v1/footprint/diff")
+      .send({
+        before: {
+          readOnly: ["AAAABgAAAAAAA"],
+          readWrite: ["AAAABgAAAAAAB"],
+        },
+        after: {
+          readOnly: ["AAAABgAAAAAAA", "AAAABgAAAAAAC"],
+          readWrite: [],
+        },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchInlineSnapshot(`
+      {
+        "data": {
+          "added": {
+            "readOnly": [
+              "AAAABgAAAAAAC",
+            ],
+            "readWrite": [],
+          },
+          "removed": {
+            "readOnly": [],
+            "readWrite": [
+              "AAAABgAAAAAAB",
+            ],
+          },
+          "unchanged": {
+            "readOnly": [
+              "AAAABgAAAAAAA",
+            ],
+            "readWrite": [],
+          },
+        },
+        "success": true,
+      }
+    `);
+  });
+
+  it("matches parsed openapi.yaml schema snapshot", () => {
+    const specPath = path.resolve(__dirname, "../../openapi.yaml");
+    const rawSpec = fs.readFileSync(specPath, "utf8");
+    const parsedSpec = YAML.parse(rawSpec) as Record<string, unknown>;
+
+    expect(parsedSpec).toMatchSnapshot();
   });
 });

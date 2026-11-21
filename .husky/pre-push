@@ -28,6 +28,12 @@ do
   fi
 done
 
-echo "✅ Pre-push checks passed."
+echo "🔍 Running TypeScript typecheck..."
+pnpm run typecheck
+
+echo "🧪 Running fast unit tests..."
+pnpm test -- --testPathPattern='unit' --bail --passWithNoTests
+
+echo "✅ Pre-push checks passed. (Use 'git push --no-verify' only for urgent bypasses.)"
 
 exit 0
