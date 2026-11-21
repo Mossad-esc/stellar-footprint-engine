@@ -9,6 +9,10 @@ import {
   FEE_BUMP_XDR,
   INVALID_BASE64_XDR,
 } from "../../tests/fixtures/xdr";
+import {
+  buildMockTransaction,
+  mockTransaction,
+} from "../../tests/factories/transactionFactory";
 import * as footprintParser from "../footprintParser";
 import { simulateTransaction, simulateDryRun } from "../simulator";
 
@@ -404,19 +408,9 @@ function transaction(
   args = transferArgs,
   auth: StellarSdk.xdr.SorobanAuthorizationEntry[] = [],
 ): StellarSdk.Transaction {
-  return new StellarSdk.TransactionBuilder(
-    new StellarSdk.Account(payer.publicKey(), "1"),
-    { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
-  )
-    .addOperation(
-      StellarSdk.Operation.invokeHostFunction({
-        func: StellarSdk.xdr.HostFunction.hostFunctionTypeInvokeContract(
-          invocation(functionName, args),
-        ),
-        auth,
-      }),
-    )
-    .setTimeout(0)
+  return mockTransaction({ sourceAccount: payer })
+    .withContractCall(contract, functionName, args)
+    .withAuth(auth)
     .build();
 }
 function accountData(
@@ -511,15 +505,12 @@ describe("static dry run", () => {
       latestLedger: 101,
     });
     expect(simulateDryRun(FEE_BUMP_XDR).operations[0].type).toBe("payment");
-    const upload = new StellarSdk.TransactionBuilder(
-      new StellarSdk.Account(payer.publicKey(), "1"),
-      { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
-    )
-      .addOperation(
+    const upload = buildMockTransaction({
+      sourceAccount: payer,
+      operations: [
         StellarSdk.Operation.uploadContractWasm({ wasm: Buffer.from("wasm") }),
-      )
-      .setTimeout(0)
-      .build();
+      ],
+    });
     expect(
       simulateDryRun(upload.toXDR()).operations[0].invocation,
     ).toBeUndefined();

@@ -257,6 +257,39 @@ docker-compose -f docker-compose.prod.yml logs stellar-footprint-service
 |---|---|---|
 | `GRAFANA_USER` | `admin` | Grafana admin username |
 | `GRAFANA_PASSWORD` | `admin` | Grafana admin password — **change in production** |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP HTTP collector endpoint (e.g., `http://localhost:4318`). Tracing is disabled when unset |
+| `OTEL_SERVICE_NAME` | `stellar-footprint-service` | Service name reported in OpenTelemetry trace spans |
+
+---
+
+## Distributed Tracing (OpenTelemetry)
+
+The service supports distributed tracing via OpenTelemetry (`@opentelemetry/sdk-node`, `@opentelemetry/auto-instrumentations-node`, and `@opentelemetry/exporter-trace-otlp-http`) with W3C Trace Context (`traceparent` / `tracestate`) propagation.
+
+### Enabling Tracing
+
+Tracing is conditionally enabled at startup in `src/tracing.ts` when `OTEL_EXPORTER_OTLP_ENDPOINT` is set:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_SERVICE_NAME=stellar-footprint-service
+```
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, tracing initialization is a no-op with zero overhead.
+
+### Custom Spans & Context Propagation
+
+In addition to automatic instrumentation for Express, HTTP, and Redis (`ioredis`), the simulation pipeline records custom spans:
+
+| Span Name | Description |
+|---|---|
+| `cache.get` | Cache lookup for a simulation result |
+| `cache.set` | Cache write after a successful simulation |
+| `rpc.simulateTransaction` | Upstream Stellar RPC `simulateTransaction` call |
+| `xdr.parseFootprint` | Decoding and classifying XDR footprint entries |
+| `footprint.optimize` | Merging and deduplicating transaction footprints |
+
+Incoming W3C `traceparent` headers are automatically extracted by OpenTelemetry HTTP/Express instrumentation and propagated to outgoing Stellar RPC requests.
 
 ---
 

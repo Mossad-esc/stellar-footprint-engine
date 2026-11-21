@@ -114,7 +114,7 @@ pnpm test
 ```bash
 pnpm run test:coverage
 ```
-This generates a coverage report showing which lines of code are tested. Aim for high coverage on critical services like `feeEstimator.ts`, `footprintExtractor.ts`, and `simulator.ts`.
+This generates a coverage report showing which lines of code are tested and enforces the repository's minimum coverage thresholds (`85%` branches, `90%` functions, `90%` lines, `90%` statements). CI will fail if coverage drops below these thresholds. Aim for high coverage on critical services like `feeEstimator.ts`, `footprintExtractor.ts`, and `simulator.ts`.
 
 **Run a single test file:**
 ```bash

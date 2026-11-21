@@ -3,6 +3,11 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+// Initialize OpenTelemetry before Express and other instrumented modules load
+// eslint-disable-next-line import-x/order
+import { initTracing, shutdownTracing } from "./tracing";
+initTracing();
+
 const _startupBegin = process.hrtime.bigint();
 
 import path from "path";
@@ -171,6 +176,9 @@ if (require.main === module) {
 
   const shutdown = (signal: string) => {
     logger.info(`${signal} received, shutting down gracefully`);
+    shutdownTracing().catch((err: unknown) => {
+      logger.warn({ err }, "Error shutting down OpenTelemetry tracing");
+    });
     server.close(() => {
       logger.info("Server closed, exiting");
       process.exit(0);
