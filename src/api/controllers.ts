@@ -2,7 +2,7 @@ import path from "path";
 
 import { Network } from "@config/stellar";
 import metrics from "@middleware/metrics";
-import { getCache } from "@services/cache";
+import { getCache, invalidateContractCache } from "@services/cache";
 import { decodeXdr, type XdrType } from "@services/decoder";
 import {
   estimateFee,
@@ -599,6 +599,35 @@ export async function invalidateCache(
     res
       .status(HTTP_STATUS.OK)
       .json({ message: "Cache invalidated", backend: cache.backend });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
+}
+
+export async function invalidateContractCacheController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { contractId } = req.params as { contractId?: string };
+    if (!contractId || contractId.trim() === "") {
+      return next(
+        new AppError(
+          "Missing required parameter: contractId",
+          HTTP_STATUS.BAD_REQUEST,
+        ),
+      );
+    }
+
+    const count = await invalidateContractCache(contractId);
+    res.status(HTTP_STATUS.OK).json({
+      message: `Invalidated ${count} cache entries for contract ${contractId}`,
+      contractId,
+      invalidatedCount: count,
+    });
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;

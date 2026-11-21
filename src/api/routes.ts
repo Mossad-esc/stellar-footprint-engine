@@ -13,6 +13,7 @@ import {
   decode,
   restore,
   invalidateCache,
+  invalidateContractCacheController,
   estimateFeeController,
   costBreakdownController,
   openApiSpec,
@@ -78,6 +79,9 @@ router.post("/estimate-fee", feeRateLimiter, estimateFeeController);
 
 // DELETE /cache — flush all cache entries (Redis or in-memory)
 router.delete("/cache", invalidateCache);
+
+// DELETE /cache/contract/:contractId — invalidate cache entries for a specific contract
+router.delete("/cache/contract/:contractId", invalidateContractCacheController);
 
 // GET /openapi.json — serve raw OpenAPI spec as JSON
 router.get("/openapi.json", openApiSpec);
