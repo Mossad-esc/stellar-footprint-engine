@@ -29,6 +29,8 @@ export const EnvSchema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   CACHE_MAX_SIZE: z.coerce.number().int().positive().default(500),
+  CACHE_HEAP_SAFETY_THRESHOLD: z.coerce.number().min(0.5).max(0.95).default(0.85),
+  CACHE_EMERGENCY_TRIM_RATIO: z.coerce.number().min(0.1).max(0.5).default(0.25),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   DECODE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
