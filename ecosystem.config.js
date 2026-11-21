@@ -6,6 +6,9 @@ module.exports = {
       // Use PM2 cluster mode to utilise all available CPU cores.
       instances: "max",
       exec_mode: "cluster",
+      kill_timeout: 10000,
+      listen_timeout: 8000,
+      wait_ready: true,
       max_restarts: 10,
       restart_delay: 3000,
       out_file: "logs/out.log",

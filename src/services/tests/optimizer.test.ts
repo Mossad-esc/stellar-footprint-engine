@@ -12,18 +12,33 @@ describe("optimizeFootprint", () => {
     const result = optimizeFootprint([A, B], [B, C]);
     expect(result.readOnly).toEqual([A]);
     expect(result.readWrite).toEqual([B, C]);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 2,
+      optimizedReadOnlyCount: 1,
+      removedCount: 1,
+    });
   });
 
   it("sets optimized: true when entries are removed", () => {
     const result = optimizeFootprint([A, B], [B]);
     expect(result.optimized).toBe(true);
-    expect(result.stats.removedCount).toBe(1);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 2,
+      optimizedReadOnlyCount: 1,
+      removedCount: 1,
+    });
   });
 
   it("sets optimized: false when no entries are removed", () => {
     const result = optimizeFootprint([A], [B]);
     expect(result.optimized).toBe(false);
-    expect(result.stats.removedCount).toBe(0);
+    expect(result.readOnly).toEqual([A]);
+    expect(result.readWrite).toEqual([B]);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 1,
+      optimizedReadOnlyCount: 1,
+      removedCount: 0,
+    });
   });
 
   it("returns empty outputs for empty inputs", () => {
@@ -31,11 +46,28 @@ describe("optimizeFootprint", () => {
     expect(result.readOnly).toEqual([]);
     expect(result.readWrite).toEqual([]);
     expect(result.optimized).toBe(false);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 0,
+      optimizedReadOnlyCount: 0,
+      removedCount: 0,
+    });
   });
 
   it("preserves rawFootprint with original entries", () => {
     const result = optimizeFootprint([A, B], [B]);
     expect(result.rawFootprint.readOnly).toEqual([A, B]);
     expect(result.rawFootprint.readWrite).toEqual([B]);
+  });
+
+  it("removes multiple overlapping entries while retaining distinct ones", () => {
+    const result = optimizeFootprint([A, B, C], [A, C]);
+    expect(result.readOnly).toEqual([B]);
+    expect(result.readWrite).toEqual([A, C]);
+    expect(result.optimized).toBe(true);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 3,
+      optimizedReadOnlyCount: 1,
+      removedCount: 2,
+    });
   });
 });

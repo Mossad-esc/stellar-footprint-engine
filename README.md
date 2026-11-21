@@ -109,6 +109,65 @@ cp .env.example .env
 # Edit .env with your RPC URLs and keys
 ```
 
+## 🖥️ CLI Tool (`sfe`)
+
+A command-line tool is bundled with the service for quick terminal-based inspection without writing cURL commands or custom scripts.
+
+### Install globally
+
+```bash
+# After building the project
+npm run build
+npm link        # adds `sfe` to your PATH, or
+npx sfe --help
+```
+
+### Configuration
+
+| Env variable  | Default                  | Description                           |
+|---------------|--------------------------|---------------------------------------|
+| `SFE_BASE_URL` | `http://localhost:3000` | URL of the running service            |
+| `SFE_API_KEY`  | *(none)*                | API key forwarded as `x-api-key`      |
+| `SFE_NETWORK`  | `testnet`               | Default network when `--network` is omitted |
+
+### Commands
+
+#### `sfe simulate <xdr>`
+
+Simulate a Soroban transaction XDR and display footprint, cost, and contracts.
+
+```
+sfe simulate <xdr> [--network testnet|mainnet|futurenet] [--json]
+```
+
+#### `sfe diff <xdr1> <xdr2>`
+
+Compare the footprints of two transaction XDRs side-by-side.
+
+```
+sfe diff <xdr1> <xdr2> [--network testnet] [--json]
+```
+
+#### `sfe decode <xdr>`
+
+Decode an XDR string into human-readable JSON without an RPC call.
+
+```
+sfe decode <xdr> [--type TransactionEnvelope] [--json]
+```
+
+#### `sfe cost <xdr>`
+
+Simulate a transaction and render a human-readable fee summary in XLM and stroops.
+
+```
+sfe cost <xdr> [--network testnet] [--json]
+```
+
+All commands support `--json` to emit raw JSON — useful for piping into `jq`.
+
+---
+
 ## Load Testing
 
 To benchmark the service under concurrent load:

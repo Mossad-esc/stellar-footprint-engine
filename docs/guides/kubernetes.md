@@ -1,6 +1,6 @@
 # Kubernetes Deployment Guide
 
-This guide covers deploying the Stellar Footprint Service to a Kubernetes cluster using the manifests in `k8s/`.
+This guide covers deploying the Stellar Footprint Service to Kubernetes using either the **Helm chart** (recommended for production) or the **flat manifests** in `k8s/`.
 
 ---
 
@@ -8,6 +8,7 @@ This guide covers deploying the Stellar Footprint Service to a Kubernetes cluste
 
 - A running Kubernetes cluster (local: [minikube](https://minikube.sigs.k8s.io/) or [kind](https://kind.sigs.k8s.io/); cloud: EKS, GKE, AKS)
 - `kubectl` configured to target your cluster (`kubectl cluster-info`)
+- [Helm 3.8+](https://helm.sh/docs/intro/install/) (for the Helm chart)
 - The service Docker image built and pushed to a registry accessible by your cluster
 
 Build and push the image:
@@ -17,11 +18,146 @@ docker build -t your-registry/stellar-footprint-service:latest .
 docker push your-registry/stellar-footprint-service:latest
 ```
 
-Update the `image:` field in `k8s/deployment.yaml` to match your registry path.
+---
+
+## Deploying with the Helm Chart (Recommended)
+
+The production Helm chart lives in `charts/stellar-footprint-service/`. It includes parameterized templates for Deployment, Service, Ingress (with cert-manager TLS), ConfigMap, Secret, HPA (70% CPU target), Pod Disruption Budget (minAvailable: 1), NetworkPolicy, and ServiceAccount.
+
+### 1. Configure values
+
+Copy and edit a custom values file:
+
+```bash
+cp charts/stellar-footprint-service/values.yaml my-values.yaml
+```
+
+Edit `my-values.yaml`:
+
+```yaml
+image:
+  repository: your-registry/stellar-footprint-service
+  tag: "1.0.0"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: footprint.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: stellar-footprint-tls
+      hosts:
+        - footprint.example.com
+
+redis:
+  enabled: true
+  host: redis-master
+  port: 6379
+
+secrets:
+  TESTNET_RPC_URL: "https://soroban-testnet.stellar.org"
+  MAINNET_RPC_URL: "https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
+  TESTNET_SECRET_KEY: "<your_testnet_secret_key>"
+  MAINNET_SECRET_KEY: "<your_mainnet_secret_key>"
+```
+
+> **Security:** Store secrets in a sealed or external secrets manager for production. The `secrets` block in values.yaml is convenient for development but should not be committed with real credentials.
+
+### 2. Install the chart
+
+```bash
+helm install stellar-footprint charts/stellar-footprint-service \
+  -f my-values.yaml \
+  -n stellar-footprint \
+  --create-namespace
+```
+
+### 3. Verify the deployment
+
+```bash
+kubectl rollout status deployment/stellar-footprint -n stellar-footprint
+kubectl get pods -n stellar-footprint
+kubectl get hpa -n stellar-footprint
+kubectl get pdb -n stellar-footprint
+kubectl get ingress -n stellar-footprint
+```
+
+### 4. Test the service
+
+```bash
+kubectl port-forward svc/stellar-footprint 8080:80 -n stellar-footprint
+curl http://localhost:8080/api/v1/health/ready
+```
+
+### 5. Upgrade
+
+```bash
+helm upgrade stellar-footprint charts/stellar-footprint-service \
+  -f my-values.yaml \
+  -n stellar-footprint
+```
+
+### Key configuration options
+
+| Parameter | Default | Description |
+|---|---|---|
+| `replicaCount` | `2` | Pod replicas (ignored when HPA enabled) |
+| `image.repository` | `stellar-footprint-service` | Container image |
+| `image.tag` | `""` (uses `appVersion`) | Image tag |
+| `service.port` | `80` | Service port |
+| `service.targetPort` | `3000` | Container port |
+| `ingress.enabled` | `false` | Enable Ingress with TLS |
+| `ingress.annotations` | `cert-manager.io/cluster-issuer: letsencrypt-prod` | cert-manager annotations |
+| `autoscaling.enabled` | `true` | Enable HPA |
+| `autoscaling.minReplicas` | `2` | Minimum pods |
+| `autoscaling.maxReplicas` | `10` | Maximum pods |
+| `autoscaling.targetCPUUtilizationPercentage` | `70` | CPU target for scaling |
+| `podDisruptionBudget.enabled` | `true` | Enable PDB |
+| `podDisruptionBudget.minAvailable` | `1` | Min available during disruptions |
+| `networkPolicy.enabled` | `true` | Restrict ingress/egress |
+| `redis.enabled` | `false` | Set REDIS_URL and allow egress to Redis |
+| `config.*` | See `values.yaml` | Non-sensitive env vars (ConfigMap) |
+| `secrets.*` | See `values.yaml` | Sensitive env vars (Secret) |
+
+### Environment variables
+
+The ConfigMap uses the zod-validated env-var names from `src/config/env.ts`. Setting a present-but-invalid value (e.g. `LOG_LEVEL=verbose`) will crash-loop the pod in production because `validateEnv()` calls `process.exit(1)`.
+
+Non-sensitive vars (ConfigMap): `NODE_ENV`, `PORT`, `LOG_LEVEL`, `NETWORK`, `SIMULATE_TIMEOUT_MS`, `COMPRESSION_THRESHOLD`, `RPC_POOL_TTL_MS`, `CACHE_TTL_SECONDS`, `CACHE_MAX_SIZE`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`, `DECODE_RATE_LIMIT_MAX`, `DECODE_RATE_LIMIT_WINDOW_MS`, `FEE_RATE_LIMIT_MAX`, `FEE_RATE_LIMIT_WINDOW_MS`, `BATCH_CONCURRENCY`, `NETWORK_STATUS_TTL_MS`, `KEEP_ALIVE_TIMEOUT_MS`, `HEADERS_TIMEOUT_MS`.
+
+Sensitive vars (Secret): `TESTNET_RPC_URL`, `MAINNET_RPC_URL`, `FUTURENET_RPC_URL`, `TESTNET_SECRET_KEY`, `MAINNET_SECRET_KEY`, `FUTURENET_SECRET_KEY`, `API_KEYS` (optional).
+
+### Health probes
+
+The chart points probes directly at the canonical paths `/api/v1/health/live` and `/api/v1/health/ready` (avoiding the 308 redirect the flat manifests rely on). The readiness probe checks Redis connectivity and the RPC circuit-breaker state; if Redis is down, the pod stays not-ready until the in-memory fallback activates.
+
+### Security hardening
+
+The chart applies both pod-level and container-level security contexts:
+
+- `runAsNonRoot: true`, `runAsUser/runAsGroup: 1001` (matches Dockerfile non-root user)
+- `readOnlyRootFilesystem: true` with an `emptyDir` mounted at `/tmp`
+- `allowPrivilegeEscalation: false`
+- `capabilities.drop: [ALL]`
+- `seccompProfile: RuntimeDefault`
+- `automountServiceAccountToken: false`
+
+### CI validation
+
+The CI workflow (`.github/workflows/ci.yml`) includes a `helm` job that runs `helm lint`, renders templates with default and custom values, and validates the rendered manifests with `kubeconform`.
 
 ---
 
-## Manifests Overview
+## Deploying with Flat Manifests (Legacy)
+
+The `k8s/` directory contains flat YAML manifests for simpler deployments without Helm.
+
+### Manifests Overview
 
 | File | Purpose |
 |---|---|
@@ -30,183 +166,45 @@ Update the `image:` field in `k8s/deployment.yaml` to match your registry path.
 | `k8s/hpa.yaml` | Horizontal Pod Autoscaler (2–10 replicas) |
 | `k8s/configmap.yaml` | Non-sensitive environment variables |
 | `k8s/secret.yaml.template` | Template for sensitive values (RPC URLs, keys) |
+| `k8s/network-policy.yaml` | Ingress/egress restrictions |
 
----
+### Applying the Manifests
 
-## Applying the Manifests
+1. Create a namespace (optional but recommended):
 
-### 1. Create a namespace (optional but recommended)
+   ```bash
+   kubectl create namespace stellar-footprint
+   ```
 
-```bash
-kubectl create namespace stellar-footprint
-```
+2. Configure secrets:
 
-All subsequent commands use `-n stellar-footprint`. Omit the flag to deploy to the `default` namespace.
+   ```bash
+   cp k8s/secret.yaml.template k8s/secret.yaml
+   ```
 
-### 2. Configure secrets
+   Edit `k8s/secret.yaml` with real RPC URLs and secret keys. **Never commit `k8s/secret.yaml`.**
 
-Copy the secret template and fill in real values:
+3. Apply all manifests:
 
-```bash
-cp k8s/secret.yaml.template k8s/secret.yaml
-```
+   ```bash
+   kubectl apply -f k8s/ -n stellar-footprint
+   ```
 
-Edit `k8s/secret.yaml`:
+4. Verify:
 
-```yaml
-stringData:
-  TESTNET_RPC_URL: "https://soroban-testnet.stellar.org"
-  MAINNET_RPC_URL: "https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
-  TESTNET_SECRET_KEY: "<your_testnet_secret_key>"
-  MAINNET_SECRET_KEY: "<your_mainnet_secret_key>"
-```
+   ```bash
+   kubectl rollout status deployment/stellar-footprint-service -n stellar-footprint
+   kubectl get pods -n stellar-footprint
+   ```
 
-> **Never commit `k8s/secret.yaml`.** It is already listed in `.gitignore`. For production, prefer a secrets manager (AWS Secrets Manager, HashiCorp Vault, Sealed Secrets) over plain Kubernetes Secrets.
+5. Test:
 
-Apply the secret:
+   ```bash
+   kubectl port-forward svc/stellar-footprint-service 8080:80 -n stellar-footprint
+   curl http://localhost:8080/api/v1/health/ready
+   ```
 
-```bash
-kubectl apply -f k8s/secret.yaml -n stellar-footprint
-```
-
-### 3. Apply all remaining manifests
-
-```bash
-kubectl apply -f k8s/configmap.yaml -n stellar-footprint
-kubectl apply -f k8s/deployment.yaml -n stellar-footprint
-kubectl apply -f k8s/service.yaml -n stellar-footprint
-kubectl apply -f k8s/hpa.yaml -n stellar-footprint
-```
-
-Or apply the whole directory at once (secret must already exist):
-
-```bash
-kubectl apply -f k8s/ -n stellar-footprint
-```
-
-### 4. Verify the deployment
-
-```bash
-kubectl rollout status deployment/stellar-footprint-service -n stellar-footprint
-kubectl get pods -n stellar-footprint
-```
-
-Expected output:
-
-```
-NAME                                        READY   STATUS    RESTARTS   AGE
-stellar-footprint-service-6d9f8b7c4-abc12   1/1     Running   0          30s
-stellar-footprint-service-6d9f8b7c4-def34   1/1     Running   0          30s
-```
-
-### 5. Test the service
-
-Port-forward to test locally:
-
-```bash
-kubectl port-forward svc/stellar-footprint-service 8080:80 -n stellar-footprint
-curl http://localhost:8080/api/health
-```
-
----
-
-## Configuring Secrets
-
-The deployment loads secrets from the `stellar-footprint-secrets` Kubernetes Secret. To update a value without redeploying:
-
-```bash
-kubectl patch secret stellar-footprint-secrets \
-  -n stellar-footprint \
-  --type='json' \
-  -p='[{"op":"replace","path":"/stringData/TESTNET_RPC_URL","value":"https://new-rpc-url"}]'
-
-kubectl rollout restart deployment/stellar-footprint-service -n stellar-footprint
-```
-
-To update ConfigMap values (non-sensitive):
-
-```bash
-kubectl patch configmap stellar-footprint-config \
-  -n stellar-footprint \
-  --type='merge' \
-  -p '{"data":{"LOG_LEVEL":"debug"}}'
-
-kubectl rollout restart deployment/stellar-footprint-service -n stellar-footprint
-```
-
----
-
-## HPA Tuning
-
-The HPA in `k8s/hpa.yaml` scales between **2 and 10 replicas** based on CPU utilisation, targeting **70%** average utilisation.
-
-```yaml
-minReplicas: 2
-maxReplicas: 10
-metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
-```
-
-**Tuning guidelines:**
-
-- Lower `averageUtilization` (e.g. `50`) to scale out earlier and reduce latency spikes under bursty load.
-- Increase `maxReplicas` if you expect sustained high traffic.
-- Ensure the Kubernetes Metrics Server is installed for HPA to function:
-  ```bash
-  kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-  ```
-- Check HPA status:
-  ```bash
-  kubectl get hpa -n stellar-footprint
-  ```
-
----
-
-## Health Check Configuration
-
-The deployment configures two probes against the dedicated health endpoints:
-
-| Probe | Path | Purpose |
-|---|---|---|
-| Liveness | `GET /api/health/live` | Restarts the container if the process is stuck |
-| Readiness | `GET /api/health/ready` | Removes the pod from the load balancer until it is ready |
-
-Current settings in `k8s/deployment.yaml`:
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /api/health/live
-    port: 3000
-  initialDelaySeconds: 15
-  periodSeconds: 20
-  timeoutSeconds: 3
-  failureThreshold: 3
-
-readinessProbe:
-  httpGet:
-    path: /api/health/ready
-    port: 3000
-  initialDelaySeconds: 5
-  periodSeconds: 10
-  timeoutSeconds: 3
-  failureThreshold: 3
-```
-
-**Tuning guidelines:**
-
-- Increase `initialDelaySeconds` on the liveness probe if the service takes longer to start (e.g. slow Redis connection).
-- Decrease `periodSeconds` on the readiness probe for faster traffic recovery after a restart.
-- The readiness probe checks Redis and the RPC circuit breaker state. If Redis is unavailable, the pod will be marked not-ready until the in-memory fallback activates.
-
----
-
-## Updating the Deployment
+### Updating
 
 ```bash
 # Pull latest image and trigger a rolling update
@@ -220,6 +218,25 @@ kubectl rollout status deployment/stellar-footprint-service -n stellar-footprint
 # Roll back if needed
 kubectl rollout undo deployment/stellar-footprint-service -n stellar-footprint
 ```
+
+---
+
+## HPA Tuning
+
+Both the Helm chart and flat manifests scale between **2 and 10 replicas** based on CPU utilisation, targeting **70%** average utilisation.
+
+**Tuning guidelines:**
+
+- Lower `averageUtilization` (e.g. `50`) to scale out earlier and reduce latency spikes under bursty load.
+- Increase `maxReplicas` if you expect sustained high traffic.
+- Ensure the Kubernetes Metrics Server is installed for HPA to function:
+  ```bash
+  kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+  ```
+- Check HPA status:
+  ```bash
+  kubectl get hpa -n stellar-footprint
+  ```
 
 ---
 

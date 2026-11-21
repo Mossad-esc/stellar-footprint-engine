@@ -1,110 +1,84 @@
 # TypeScript Integration Example
 
-This example demonstrates the full simulate → assemble → sign → submit flow using TypeScript.
+This example demonstrates using the official `@stellar-footprint/sdk` TypeScript/JavaScript client library to simulate transactions, estimate fees, compare footprints, and decode XDR payloads.
 
 ## Prerequisites
 
-- Node.js installed
-- TypeScript compiler (tsc)
-- A Stellar testnet account with funds (friendbot can be used)
-- The Stellar Footprint Service running (default: http://localhost:8080)
+- Node.js 18+ installed
+- `@stellar-footprint/sdk` installed (`pnpm add @stellar-footprint/sdk`)
+- The Stellar Footprint Service running (default: `http://localhost:3000`)
+
+## Installation
+
+```bash
+pnpm add @stellar-footprint/sdk
+```
 
 ## Code
 
 ```typescript
-import * as StellarSdk from "stellar-sdk";
-import fetch from "node-fetch";
+import {
+  StellarFootprintClient,
+  StellarFootprintError,
+} from "@stellar-footprint/sdk";
 
-// Configuration
-const SERVICE_URL = "http://localhost:8080";
-const NETWORK = StellarSdk.Networks.TESTNET;
+const client = new StellarFootprintClient({
+  baseURL: "http://localhost:3000/api/v1",
+  timeout: 15_000,
+  retries: 2,
+  apiKey: process.env.FOOTPRINT_API_KEY, // optional
+});
 
-// Initialize Stellar SDK
-const server = new StellarSdk.Server("https://horizon-testnet.stellar.org");
-const sourceKeypair = StellarSdk.Keypair.fromSecret("YOUR_TESTNET_SECRET_SEED"); // Replace with your secret seed
+const SAMPLE_TX_XDR =
+  "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==";
 
 async function main() {
   try {
-    // Step 1: Simulate the transaction
-    console.log("Step 1: Simulating transaction...");
-    const simulateResponse = await fetch(`${SERVICE_URL}/simulate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    // 1. Decode XDR locally via API
+    const decoded = await client.decode(SAMPLE_TX_XDR, "transaction");
+    console.log("Decoded transaction:", decoded.success);
+
+    // 2. Simulate a single transaction
+    const simulation = await client.simulate(SAMPLE_TX_XDR, {
+      network: "testnet",
+    });
+    console.log("Simulation success:", simulation.success);
+    console.log("Footprint stats:", simulation.footprintStats);
+
+    // 3. Estimate fees using simulated cost
+    if (simulation.cost) {
+      const fee = await client.estimateFee(SAMPLE_TX_XDR, {
+        cpuInsns: simulation.cost.cpuInsns,
+        memBytes: simulation.cost.memBytes,
         network: "testnet",
-        // Add your transaction simulation parameters here
-        // Example: { operation: 'payment', destination: 'GA...', amount: '10' }
-      }),
-    });
-
-    if (!simulateResponse.ok) {
-      throw new Error(`Simulation failed: ${await simulateResponse.text()}`);
+      });
+      console.log("Estimated total fee (XLM):", fee.feeInXLM);
     }
 
-    const simulateData = await simulateResponse.json();
-    console.log("Simulation successful:", simulateData);
-
-    // Step 2: Assemble the transaction
-    console.log("\nStep 2: Assembling transaction...");
-    const assembleResponse = await fetch(`${SERVICE_URL}/assemble`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(simulateData),
+    // 4. Batch simulate multiple transactions
+    const batch = await client.simulateBatch([SAMPLE_TX_XDR], {
+      network: "testnet",
     });
+    console.log("Batch results:", batch.results.length);
 
-    if (!assembleResponse.ok) {
-      throw new Error(`Assembly failed: ${await assembleResponse.text()}`);
+    // 5. Diff two footprints
+    const diff = await client.diffFootprints(
+      { readOnly: [], readWrite: [] },
+      simulation.rawFootprint ?? { readOnly: [], readWrite: [] },
+    );
+    console.log("Added footprint entries:", diff.added);
+  } catch (err) {
+    if (err instanceof StellarFootprintError) {
+      console.error(`SDK Error [${err.code ?? err.status}]:`, err.message);
+    } else {
+      console.error("Unexpected error:", err);
     }
-
-    const assembleData = await assembleResponse.json();
-    console.log("Assembly successful:", assembleData);
-
-    // Step 3: Sign the transaction
-    console.log("\nStep 3: Signing transaction...");
-    const transaction = new StellarSdk.Transaction(assembleData.xdr, NETWORK);
-    transaction.sign(sourceKeypair);
-    const signedXdr = transaction.toEnvelope().toXDR();
-    console.log("Transaction signed");
-
-    // Step 4: Submit the transaction
-    console.log("\nStep 4: Submitting transaction...");
-    const submitResponse = await fetch(`${SERVICE_URL}/submit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ signed_xdr: signedXdr }),
-    });
-
-    if (!submitResponse.ok) {
-      throw new Error(`Submission failed: ${await submitResponse.text()}`);
-    }
-
-    const submitData = await submitResponse.json();
-    console.log("Submission successful:", submitData);
-  } catch (error) {
-    console.error("Error:", error.message);
   }
 }
 
 main();
 ```
 
-## Expected Output
-
-```
-Step 1: Simulating transaction...
-Simulation successful: { ... }
-Step 2: Assembling transaction...
-Assembly successful: { ... }
-Step 3: Signing transaction...
-Transaction signed
-Step 4: Submitting transaction...
-Submission successful: { ... }
-```
-
 ## Error Handling
 
-Each step includes error handling for network issues, invalid responses, and service errors. The example will log descriptive error messages to help with debugging.
-
-## Testnet Usage
-
-This example uses the Stellar testnet network. Ensure you have a testnet account with sufficient funds to cover transaction fees. You can obtain testnet funds using [Stellar's Friendbot](https://www.stellar.org/developers/learn/funding-account.html).
+All failed requests throw a typed `StellarFootprintError` containing `status`, `code`, and `details` from the API response envelope. Transient `429` and `5xx` responses as well as network errors are automatically retried with exponential backoff according to the `retries` configuration.

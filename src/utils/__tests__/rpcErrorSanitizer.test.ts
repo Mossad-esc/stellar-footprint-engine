@@ -81,4 +81,84 @@ describe("sanitizeRpcError", () => {
     const result = sanitizeRpcError("some unknown rpc error");
     expect(result.length).toBeGreaterThan(0);
   });
+
+  // Diverse RPC error shape matrix (#100)
+  describe("error shape matrix", () => {
+    it("handles standard Soroban JSON-RPC error with code and message", () => {
+      const jsonRpcError = {
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: -32602,
+          message: "failed to decode transaction XDR",
+        },
+      };
+      expect(sanitizeRpcError(jsonRpcError)).toBe(
+        "Invalid transaction XDR provided.",
+      );
+      expect(sanitizeRpcError(JSON.stringify(jsonRpcError))).toBe(
+        "Invalid transaction XDR provided.",
+      );
+    });
+
+    it("handles raw HTML error page from Cloudflare proxy without leaking markup", () => {
+      const htmlPage = `<!DOCTYPE html>
+<html>
+  <head><title>502 Bad Gateway | Cloudflare</title></head>
+  <body><h1>502 Bad Gateway</h1><p>Ray ID: 8a1b2c3d4e5f</p></body>
+</html>`;
+      const result = sanitizeRpcError(htmlPage);
+      expect(result).toBe(
+        "RPC service returned an unexpected error. Please try again.",
+      );
+      expect(result).not.toContain("<html");
+      expect(result).not.toContain("Cloudflare");
+    });
+
+    it("handles Axios network timeout error (ETIMEDOUT)", () => {
+      const axiosTimeout = {
+        isAxiosError: true,
+        code: "ETIMEDOUT",
+        message: "timeout of 10000ms exceeded",
+        config: { url: "https://internal-rpc.example.com/v1/secretkey1234567890" },
+      };
+      const result = sanitizeRpcError(axiosTimeout);
+      expect(result).toBe("RPC network error. Please try again.");
+      expect(result).not.toContain("internal-rpc");
+    });
+
+    it("handles Stellar Core host panic error with nested diagnostic events", () => {
+      const hostPanic = {
+        error: {
+          code: -32000,
+          message:
+            "HostError: Error(Contract, #1) - panicked at 'explicit panic' in /usr/src/soroban-env-host/src/vm.rs:120",
+          diagnosticEvents: [
+            {
+              event: {
+                type: "diagnostic",
+                contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                topics: ["fn_call"],
+              },
+            },
+          ],
+        },
+      };
+      const result = sanitizeRpcError(hostPanic);
+      expect(result).toBe("Contract execution failed during simulation.");
+      expect(result).not.toContain("soroban-env-host");
+      expect(result).not.toContain("diagnosticEvents");
+    });
+
+    it("handles malformed error object missing message property", () => {
+      expect(sanitizeRpcError({})).toBe("An unexpected RPC error occurred.");
+      expect(sanitizeRpcError({ status: 500 })).toBe(
+        "An unexpected RPC error occurred.",
+      );
+      expect(sanitizeRpcError(null)).toBe("An unexpected RPC error occurred.");
+      expect(sanitizeRpcError(undefined)).toBe(
+        "An unexpected RPC error occurred.",
+      );
+    });
+  });
 });
