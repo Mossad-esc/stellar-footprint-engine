@@ -1,0 +1,154 @@
+name: Performance Benchmark
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: XDR & Serialization Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR / head branch
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+          cache: pnpm
+          cache-dependency-path: head/pnpm-lock.yaml
+
+      - name: Restore historical benchmark cache
+        uses: actions/cache@v4
+        with:
+          path: .benchmark-history
+          key: benchmark-history-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            benchmark-history-main-
+            benchmark-history-
+
+      - name: Install dependencies (head)
+        working-directory: head
+        run: pnpm install --frozen-lockfile
+
+      - name: Run benchmark on head branch
+        working-directory: head
+        run: pnpm run benchmark -- --output ../bench-head.json
+
+      - name: Save result to historical cache (main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p .benchmark-history
+          cp bench-head.json ".benchmark-history/${{ github.sha }}.json"
+          cp bench-head.json ".benchmark-history/latest-main.json"
+
+      - name: Checkout base main branch
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+
+      - name: Run benchmark on base main branch
+        if: github.event_name == 'pull_request'
+        working-directory: base
+        run: |
+          if [ -f "scripts/benchmarks/parser.bench.ts" ]; then
+            pnpm install --frozen-lockfile
+            pnpm run benchmark -- --output ../bench-base.json
+          else
+            echo "Benchmark script not present on base branch yet; skipping base run."
+          fi
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: |
+            bench-head.json
+            bench-base.json
+          if-no-files-found: ignore
+
+      - name: Compare benchmarks and comment on PR on >10% regression
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+
+            if (!fs.existsSync("bench-head.json") || !fs.existsSync("bench-base.json")) {
+              core.info("Missing head or base benchmark file; skipping comparison.");
+              return;
+            }
+
+            const head = JSON.parse(fs.readFileSync("bench-head.json", "utf8"));
+            const base = JSON.parse(fs.readFileSync("bench-base.json", "utf8"));
+            const baseMap = new Map(base.results.map((r) => [r.name, r]));
+
+            const rows = [];
+            const regressions = [];
+
+            for (const item of head.results) {
+              const baseItem = baseMap.get(item.name);
+              if (!baseItem || baseItem.opsPerSec === 0) continue;
+
+              const deltaPct = ((item.opsPerSec - baseItem.opsPerSec) / baseItem.opsPerSec) * 100;
+              const isRegression = deltaPct < -10;
+              const status = isRegression ? "REGRESSION (>10%)" : "OK";
+
+              rows.push(
+                `| ${item.name} | ${baseItem.opsPerSec.toFixed(2)} | ${item.opsPerSec.toFixed(2)} | ${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(2)}% | ${status} |`
+              );
+
+              if (isRegression) {
+                regressions.push({ name: item.name, deltaPct });
+              }
+            }
+
+            const table = [
+              "| Benchmark | Base (ops/sec) | PR (ops/sec) | Delta | Status |",
+              "| --- | ---: | ---: | ---: | --- |",
+              ...rows,
+            ].join("\n");
+
+            await core.summary
+              .addHeading("Performance Benchmark Comparison")
+              .addRaw(table)
+              .write();
+
+            if (regressions.length > 0) {
+              const body = [
+                "### Performance Regression Detected (>10%)",
+                "",
+                "The following parser/serialization benchmarks degraded by more than **10%** compared to `main`:",
+                "",
+                table,
+              ].join("\n");
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+
+              core.setFailed(
+                `Performance regression (>10%) detected in: ${regressions.map((r) => r.name).join(", ")}`
+              );
+            }

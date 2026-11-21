@@ -18,11 +18,18 @@ export class InvalidWebhookUrlError extends Error {
   }
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
 function isValidHttpsUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
+    const allowLocalHttp =
+      process.env.NODE_ENV === "test" &&
+      parsed.protocol === "http:" &&
+      LOOPBACK_HOSTS.has(parsed.hostname);
+
     return (
-      parsed.protocol === "https:" &&
+      (parsed.protocol === "https:" || allowLocalHttp) &&
       !!parsed.hostname &&
       !parsed.username &&
       !parsed.password

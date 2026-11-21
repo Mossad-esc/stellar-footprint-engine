@@ -1,0 +1,89 @@
+{
+  "Soroban Mock Transaction XDR": {
+    "scope": "typescript,javascript",
+    "prefix": "soroban-mock-tx",
+    "body": [
+      "const ${1:keypair} = StellarSdk.Keypair.random();",
+      "const ${2:account} = new StellarSdk.Account(${1:keypair}.publicKey(), \"${3:100}\");",
+      "const ${4:contract} = new StellarSdk.Contract(\"${5:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM}\");",
+      "const ${6:tx} = new StellarSdk.TransactionBuilder(${2:account}, {",
+      "  fee: StellarSdk.BASE_FEE,",
+      "  networkPassphrase: StellarSdk.Networks.${7|TESTNET,PUBLIC,FUTURENET|},",
+      "})",
+      "  .addOperation(${4:contract}.call(\"${8:balance}\", new StellarSdk.Address(${1:keypair}.publicKey()).toScVal()))",
+      "  .setTimeout(30)",
+      "  .build();",
+      "const ${9:txXdr} = ${6:tx}.toXDR();"
+    ],
+    "description": "Create a mock Soroban contract invocation transaction and encode it as base64 XDR"
+  },
+  "Soroban Ledger Footprint": {
+    "scope": "typescript,javascript",
+    "prefix": "soroban-footprint",
+    "body": [
+      "const ${1:footprint} = new StellarSdk.xdr.LedgerFootprint({",
+      "  readOnly: [${2:readOnlyKeys}].map((key) =>",
+      "    StellarSdk.xdr.LedgerKey.fromXDR(key, \"base64\"),",
+      "  ),",
+      "  readWrite: [${3:readWriteKeys}].map((key) =>",
+      "    StellarSdk.xdr.LedgerKey.fromXDR(key, \"base64\"),",
+      "  ),",
+      "});",
+      "const ${4:sorobanData} = new StellarSdk.SorobanDataBuilder()",
+      "  .setReadOnly(${1:footprint}.readOnly())",
+      "  .setReadWrite(${1:footprint}.readWrite())",
+      "  .build();"
+    ],
+    "description": "Build a Soroban LedgerFootprint and SorobanDataBuilder from base64 LedgerKey XDRs"
+  },
+  "Soroban Mock Simulation Response": {
+    "scope": "typescript,javascript",
+    "prefix": "soroban-mock-sim",
+    "body": [
+      "const ${1:simResponse}: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse = {",
+      "  id: \"${2:test-sim}\",",
+      "  _parsed: true,",
+      "  latestLedger: ${3:101},",
+      "  events: [],",
+      "  minResourceFee: \"${4:100}\",",
+      "  transactionData: new StellarSdk.SorobanDataBuilder()",
+      "    .setReadOnly(${5:readOnlyKeys})",
+      "    .setReadWrite(${6:readWriteKeys}),",
+      "};"
+    ],
+    "description": "Create a mocked StellarSdk SimulateTransactionSuccessResponse for unit tests"
+  },
+  "Soroban Decode XDR": {
+    "scope": "typescript,javascript",
+    "prefix": "soroban-decode-xdr",
+    "body": [
+      "const ${1:envelope} = StellarSdk.TransactionBuilder.fromXDR(",
+      "  ${2:xdrString},",
+      "  StellarSdk.Networks.${3|TESTNET,PUBLIC,FUTURENET|},",
+      ");"
+    ],
+    "description": "Decode a base64 TransactionEnvelope XDR string using StellarSdk"
+  },
+  "Express Async Controller Wrapper": {
+    "scope": "typescript",
+    "prefix": "soroban-controller",
+    "body": [
+      "export async function ${1:handlerName}(",
+      "  req: Request,",
+      "  res: Response,",
+      "  next: NextFunction,",
+      "): Promise<void> {",
+      "  try {",
+      "    ${2:// TODO: implement controller logic}",
+      "    res.status(HTTP_STATUS.OK).json({",
+      "      status: \"ok\",",
+      "      data: ${3:null},",
+      "    });",
+      "  } catch (error) {",
+      "    next(error);",
+      "  }",
+      "}"
+    ],
+    "description": "Wrap an Express async controller with standard error forwarding"
+  }
+}
