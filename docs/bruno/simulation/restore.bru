@@ -1,0 +1,24 @@
+meta {
+  name: Restore Footprint
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/restore
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "xdr": "{{sampleTxXdr}}",
+    "network": "{{network}}"
+  }
+}
+
+tests {
+  test("should return restore response", function () {
+    expect([200, 422]).to.include(res.getStatus());
+  });
+}

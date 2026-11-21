@@ -1,0 +1,17 @@
+meta {
+  name: Readiness Check
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/health/ready
+  body: none
+  auth: none
+}
+
+tests {
+  test("should return readiness status", function () {
+    expect([200, 503]).to.include(res.getStatus());
+  });
+}

@@ -56,3 +56,23 @@ We are committed to working with security researchers in good faith. We will not
 - Report vulnerabilities privately following this policy
 - Do not access, modify, or delete data beyond what is needed to demonstrate the issue
 - Do not disrupt the service or other users
+
+## Container Vulnerability Scanning & Remediation
+
+Release Docker images are automatically scanned with [Aqua Security Trivy](https://github.com/aquasecurity/trivy) in `.github/workflows/release.yml` before being pushed to GitHub Container Registry (GHCR). Builds fail on `CRITICAL` or `HIGH` severity vulnerabilities, and SARIF reports are uploaded to the GitHub Security tab.
+
+### Fixing Discovered Container CVEs
+
+1. **Inspect the finding**: Review the Trivy output in the failed release workflow logs or the **Security > Code scanning alerts** tab in GitHub to identify the affected package, CVE ID, installed version, and fixed version.
+2. **OS-level vulnerabilities (Alpine base image)**:
+   - Update the base image tag in `Dockerfile` (e.g., bump `node:22-alpine` to the latest patch tag or rebuild to pull updated Alpine packages).
+   - If a specific Alpine package has a newer patched version available in `apk`, run `apk upgrade --no-cache` in the `Dockerfile` runtime stage.
+3. **Node.js dependency vulnerabilities**:
+   - Update the vulnerable direct dependency in `package.json` and regenerate `pnpm-lock.yaml` with `pnpm update <package>`.
+   - For transitive dependencies that cannot be updated directly, add or bump a version constraint under `pnpm.overrides` in `package.json` and run `pnpm install`.
+4. **Verify locally before pushing**:
+   ```bash
+   docker build -t stellar-footprint-engine:scan .
+   trivy image --severity CRITICAL,HIGH --exit-code 1 stellar-footprint-engine:scan
+   ```
+5. **Unfixed upstream CVEs / false positives**: If a CVE has no upstream fix and is confirmed non-exploitable in this service's context, document the risk assessment and add the CVE ID with an expiration comment to `.trivyignore` only after maintainer review.

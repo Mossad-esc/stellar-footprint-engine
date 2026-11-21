@@ -1,0 +1,24 @@
+meta {
+  name: Decode XDR
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/decode?xdr={{sampleTxXdr}}&type=transaction
+  body: none
+  auth: none
+}
+
+params:query {
+  xdr: {{sampleTxXdr}}
+  type: transaction
+}
+
+tests {
+  test("should return 200 OK with decoded transaction", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().success).to.equal(true);
+    expect(res.getBody().type).to.equal("transaction");
+  });
+}
