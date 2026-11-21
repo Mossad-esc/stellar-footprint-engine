@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stellar-footprint-service.fullname" . }}-config
+  labels:
+    {{- include "stellar-footprint-service.labels" . | nindent 4 }}
+data:
+  NODE_ENV: {{ .Values.config.NODE_ENV | quote }}
+  PORT: {{ .Values.config.PORT | quote }}
+  LOG_LEVEL: {{ .Values.config.LOG_LEVEL | quote }}
+  NETWORK: {{ .Values.config.NETWORK | quote }}
+  SIMULATE_TIMEOUT_MS: {{ .Values.config.SIMULATE_TIMEOUT_MS | quote }}
+  COMPRESSION_THRESHOLD: {{ .Values.config.COMPRESSION_THRESHOLD | quote }}
+  RPC_POOL_TTL_MS: {{ .Values.config.RPC_POOL_TTL_MS | quote }}
+  CACHE_TTL_SECONDS: {{ .Values.config.CACHE_TTL_SECONDS | quote }}
+  CACHE_MAX_SIZE: {{ .Values.config.CACHE_MAX_SIZE | quote }}
+  RATE_LIMIT_MAX: {{ .Values.config.RATE_LIMIT_MAX | quote }}
+  RATE_LIMIT_WINDOW_MS: {{ .Values.config.RATE_LIMIT_WINDOW_MS | quote }}
+  DECODE_RATE_LIMIT_MAX: {{ .Values.config.DECODE_RATE_LIMIT_MAX | quote }}
+  DECODE_RATE_LIMIT_WINDOW_MS: {{ .Values.config.DECODE_RATE_LIMIT_WINDOW_MS | quote }}
+  FEE_RATE_LIMIT_MAX: {{ .Values.config.FEE_RATE_LIMIT_MAX | quote }}
+  FEE_RATE_LIMIT_WINDOW_MS: {{ .Values.config.FEE_RATE_LIMIT_WINDOW_MS | quote }}
+  BATCH_CONCURRENCY: {{ .Values.config.BATCH_CONCURRENCY | quote }}
+  NETWORK_STATUS_TTL_MS: {{ .Values.config.NETWORK_STATUS_TTL_MS | quote }}
+  KEEP_ALIVE_TIMEOUT_MS: {{ .Values.config.KEEP_ALIVE_TIMEOUT_MS | quote }}
+  HEADERS_TIMEOUT_MS: {{ .Values.config.HEADERS_TIMEOUT_MS | quote }}
