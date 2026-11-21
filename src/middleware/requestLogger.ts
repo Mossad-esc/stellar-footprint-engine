@@ -10,12 +10,32 @@ export function requestLogger(
   next: NextFunction,
 ): void {
   const requestId = res.locals["requestId"] as string | undefined;
-  const reqLogger = requestId ? logger.child({ requestId }) : logger;
+  const reqLogger = requestId
+    ? logger.child(
+        { requestId },
+        {
+          redact: [
+            "req.headers.authorization",
+            'req.headers["x-api-key"]',
+            "req.body.secretKey",
+          ],
+        },
+      )
+    : logger.child(
+        {},
+        {
+          redact: [
+            "req.headers.authorization",
+            'req.headers["x-api-key"]',
+            "req.body.secretKey",
+          ],
+        },
+      );
 
   if (isDebug && req.body && Object.keys(req.body as object).length > 0) {
     const logged: Record<string, unknown> = { ...(req.body as object) };
-    if (typeof logged["xdr"] === "string" && logged["xdr"].length > 50) {
-      logged["xdr"] = `${logged["xdr"].slice(0, 50)}...`;
+    if (typeof logged["xdr"] === "string" && (logged["xdr"] as string).length > 50) {
+      logged["xdr"] = `${(logged["xdr"] as string).slice(0, 50)}...`;
     }
     reqLogger.debug(logged, `${req.method} ${req.path}`);
   }

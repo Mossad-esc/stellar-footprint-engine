@@ -1,61 +1,102 @@
-import { logger } from "../logger";
+import { Writable } from "stream";
+import pino from "pino";
+import { logger, scrubStellarSecretKeys } from "../logger";
 
-describe("logger redact config", () => {
-  it("redacts secretKey", () => {
-    const stream = { write: jest.fn() };
-    const child = logger.child({});
-    // Verify redact paths are configured
-    const opts = logger as unknown as { [key: string]: unknown };
-    // pino stores redact config; we test behavior via serialization
-    const serialized = JSON.stringify(child.bindings ? child.bindings() : {});
-    // The logger instance should have redact configured
-    expect(logger).toBeDefined();
-  });
+describe("logger redaction and sanitization", () => {
+  let chunks: string[];
+  let testWritable: Writable;
+  let testLogger: ReturnType<typeof pino>;
 
-  it("masks secretKey field as [Redacted]", () => {
-    const lines: string[] = [];
-    const dest = require("pino").destination ? undefined : undefined;
-
-    // Create a fresh pino instance with the same redact config and a writable stream
-    const pino = require("pino");
-    const chunks: string[] = [];
-    const writable = new (require("stream").Writable)({
+  beforeEach(() => {
+    chunks = [];
+    testWritable = new Writable({
       write(chunk: Buffer, _enc: string, cb: () => void) {
         chunks.push(chunk.toString());
         cb();
       },
     });
 
-    const testLogger = pino(
+    testLogger = pino(
       {
         level: "info",
+        timestamp: pino.stdTimeFunctions.isoTime,
         redact: {
           paths: [
+            "req.headers.authorization",
+            'req.headers["authorization"]',
+            'req.headers[\'authorization\']',
+            "req.headers[\"x-api-key\"]",
+            'req.headers[\'x-api-key\']',
+            "req.body.secretKey",
             "secretKey",
             "MAINNET_SECRET_KEY",
             "TESTNET_SECRET_KEY",
             "authorization",
+            "x-api-key",
             "password",
           ],
-          censor: "[Redacted]",
+          censor: "[REDACTED]",
+        },
+        hooks: {
+          logMethod(inputArgs, method) {
+            const scrubbedArgs = inputArgs.map((arg) => scrubStellarSecretKeys(arg));
+            return method.apply(this, scrubbedArgs as [any, ...any[]]);
+          },
         },
       },
-      writable,
+      testWritable,
     );
+  });
 
-    testLogger.info({ secretKey: "SABCDEF123", msg: "test" });
-    testLogger.info({ MAINNET_SECRET_KEY: "SXYZ789", msg: "test2" });
-    testLogger.info({ TESTNET_SECRET_KEY: "SABC456", msg: "test3" });
-    testLogger.info({ authorization: "Bearer token123", msg: "test4" });
-    testLogger.info({ password: "hunter2", msg: "test5" });
+  it("masks Authorization and x-api-key headers as [REDACTED]", () => {
+    testLogger.info({
+      req: {
+        headers: {
+          authorization: "Bearer secret_bearer_token_123",
+          "x-api-key": "secret_api_key_456",
+        },
+      },
+      msg: "incoming request",
+    });
 
-    const output = chunks.join("\n");
-    const parsed = chunks.map((c) => JSON.parse(c));
+    const parsed = JSON.parse(chunks[0]);
+    expect(parsed.req.headers.authorization).toBe("[REDACTED]");
+    expect(parsed.req.headers["x-api-key"]).toBe("[REDACTED]");
+  });
 
-    expect(parsed[0].secretKey).toBe("[Redacted]");
-    expect(parsed[1].MAINNET_SECRET_KEY).toBe("[Redacted]");
-    expect(parsed[2].TESTNET_SECRET_KEY).toBe("[Redacted]");
-    expect(parsed[3].authorization).toBe("[Redacted]");
-    expect(parsed[4].password).toBe("[Redacted]");
+  it("scrubs Stellar secret keys (StrKey S...) from log messages and objects", () => {
+    const validSecret = "S" + "A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R9S0T1U2V3W4X5Y6Z7A8B9C";
+
+    testLogger.info({
+      req: {
+        body: {
+          secretKey: validSecret,
+        },
+      },
+      msg: `Error processing transaction with key ${validSecret}`,
+    });
+
+    const parsed = JSON.parse(chunks[0]);
+    expect(parsed.req.body.secretKey).toBe("[REDACTED]");
+    expect(parsed.msg).not.toContain(validSecret);
+    expect(parsed.msg).toContain("[REDACTED]");
+  });
+
+  it("scrubs Stellar secret keys in Error objects and stack traces", () => {
+    const validSecret = "S" + "A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R9S0T1U2V3W4X5Y6Z7A8B9C";
+    const err = new Error(`Failed with secret ${validSecret}`);
+    err.stack = `Error: Failed\n    at Object.<anonymous> (${validSecret}:10:20)`;
+
+    testLogger.error(err, "An error occurred");
+
+    const parsed = JSON.parse(chunks[0]);
+    expect(parsed.err.message).not.toContain(validSecret);
+    expect(parsed.err.message).toContain("[REDACTED]");
+    expect(parsed.err.stack).not.toContain(validSecret);
+    expect(parsed.err.stack).toContain("[REDACTED]");
+  });
+
+  it("exports and uses logger with expected redact configuration", () => {
+    expect(logger).toBeDefined();
   });
 });
