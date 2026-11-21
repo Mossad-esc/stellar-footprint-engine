@@ -3,87 +3,359 @@
     "_postman_id": "a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8",
     "name": "Stellar Footprint Service",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Postman collection for the Stellar Footprint Service API"
+    "description": "Postman collection for the Stellar Footprint Service API (v1)"
   },
   "item": [
     {
-      "name": "Health Check",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/health",
-          "host": ["{{baseUrl}}"],
-          "path": ["health"]
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check (Deprecated Alias)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Liveness Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/live",
+              "host": ["{{baseUrl}}"],
+              "path": ["health", "live"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/ready",
+              "host": ["{{baseUrl}}"],
+              "path": ["health", "ready"]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Simulate Transaction",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"xdr\": \"AAAAAgAAAAC...\",\n  \"network\": \"testnet\"\n}"
+      "name": "Simulation",
+      "item": [
+        {
+          "name": "Supported Networks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/simulate/supported-networks",
+              "host": ["{{baseUrl}}"],
+              "path": ["simulate", "supported-networks"]
+            }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{baseUrl}}/simulate",
-          "host": ["{{baseUrl}}"],
-          "path": ["simulate"]
+        {
+          "name": "Simulate Transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"xdr\": \"{{sampleTxXdr}}\",\n  \"network\": \"{{network}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/simulate",
+              "host": ["{{baseUrl}}"],
+              "path": ["simulate"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Simulate Dry Run",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"xdr\": \"{{sampleTxXdr}}\",\n  \"network\": \"{{network}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/simulate/dry-run",
+              "host": ["{{baseUrl}}"],
+              "path": ["simulate", "dry-run"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Simulate History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/simulate/history",
+              "host": ["{{baseUrl}}"],
+              "path": ["simulate", "history"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Simulation Job",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/simulate/jobs/00000000-0000-0000-0000-000000000000",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "simulate",
+                "jobs",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Simulate Batch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactions\": [\n    {\n      \"xdr\": \"{{sampleTxXdr}}\"\n    }\n  ],\n  \"network\": \"{{network}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/simulate/batch",
+              "host": ["{{baseUrl}}"],
+              "path": ["simulate", "batch"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Cost Breakdown",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/simulate/cost-breakdown?cpuInsns=100000&memBytes=1024&network={{network}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["simulate", "cost-breakdown"],
+              "query": [
+                {
+                  "key": "cpuInsns",
+                  "value": "100000"
+                },
+                {
+                  "key": "memBytes",
+                  "value": "1024"
+                },
+                {
+                  "key": "network",
+                  "value": "{{network}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Restore Footprint",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"xdr\": \"{{sampleTxXdr}}\",\n  \"network\": \"{{network}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/restore",
+              "host": ["{{baseUrl}}"],
+              "path": ["restore"]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Decode Transaction",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"xdr\": \"AAAAAgAAAAC...\"\n}"
-        },
-        "url": {
-          "raw": "{{baseUrl}}/decode",
-          "host": ["{{baseUrl}}"],
-          "path": ["decode"]
+      "name": "Network",
+      "item": [
+        {
+          "name": "Network Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/network/status?network={{network}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["network", "status"],
+              "query": [
+                {
+                  "key": "network",
+                  "value": "{{network}}"
+                }
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Estimate Fee",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"xdr\": \"AAAAAgAAAAC...\",\n  \"network\": \"testnet\"\n}"
+      "name": "Utilities",
+      "item": [
+        {
+          "name": "Footprint Diff",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"before\": {\n    \"readOnly\": [],\n    \"readWrite\": []\n  },\n  \"after\": {\n    \"readOnly\": [\"{{sampleLedgerKeyXdr}}\"],\n    \"readWrite\": []\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/footprint/diff",
+              "host": ["{{baseUrl}}"],
+              "path": ["footprint", "diff"]
+            }
+          },
+          "response": []
         },
-        "url": {
-          "raw": "{{baseUrl}}/estimate-fee",
-          "host": ["{{baseUrl}}"],
-          "path": ["estimate-fee"]
+        {
+          "name": "Validate XDR",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"xdr\": \"{{sampleTxXdr}}\",\n  \"network\": \"{{network}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/validate",
+              "host": ["{{baseUrl}}"],
+              "path": ["validate"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Decode XDR",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/decode?xdr={{sampleTxXdr}}&type=transaction",
+              "host": ["{{baseUrl}}"],
+              "path": ["decode"],
+              "query": [
+                {
+                  "key": "xdr",
+                  "value": "{{sampleTxXdr}}"
+                },
+                {
+                  "key": "type",
+                  "value": "transaction"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Estimate Fee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpuInsns\": \"100000\",\n  \"memBytes\": \"1024\",\n  \"network\": \"{{network}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/estimate-fee",
+              "host": ["{{baseUrl}}"],
+              "path": ["estimate-fee"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Invalidate Cache",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cache",
+              "host": ["{{baseUrl}}"],
+              "path": ["cache"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "OpenAPI Specification",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/openapi.json",
+              "host": ["{{baseUrl}}"],
+              "path": ["openapi.json"]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     }
   ],
   "event": [
@@ -105,7 +377,22 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:8080",
+      "value": "http://localhost:3000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "network",
+      "value": "testnet",
+      "type": "string"
+    },
+    {
+      "key": "sampleTxXdr",
+      "value": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+      "type": "string"
+    },
+    {
+      "key": "sampleLedgerKeyXdr",
+      "value": "AAAABwICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
       "type": "string"
     }
   ]

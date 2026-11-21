@@ -44,5 +44,19 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Validate API Collections (Bruno)
+        run: |
+          cp -n .env.example .env || true
+          PORT=3000 NODE_ENV=test node -r tsconfig-paths/register dist/index.js &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/api/v1/health/live > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          cd docs/bruno && npx --yes @usebruno/cli run --env local
+
       - name: Audit
         run: pnpm audit --audit-level=high || true
