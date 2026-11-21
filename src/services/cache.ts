@@ -280,6 +280,15 @@ export function getCache(): CacheService {
         logger.warn("Redis reconnecting…");
       });
 
+      // Auto-recover: when the client reconnects after an outage, restore the
+      // Redis backend so subsequent writes go to Redis instead of memory.
+      // The "ready" event fires after the initial connect and after every
+      // successful reconnection (ioredis handles reconnection automatically).
+      client.on("ready", () => {
+        logger.info("Redis cache ready — restoring Redis backend");
+        _cache = new RedisCache(client);
+      });
+
       _cache = new RedisCache(client);
       logger.info({ url: redisUrl }, "Cache backend: Redis");
     } catch (err) {
