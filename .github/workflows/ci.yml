@@ -46,3 +46,48 @@ jobs:
 
       - name: Audit
         run: pnpm audit --audit-level=high || true
+
+  integration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start test containers
+        run: docker compose -f docker-compose.test.yml up -d
+
+      - name: Wait for Soroban RPC
+        run: ./scripts/wait-for-soroban.sh
+
+      - name: Deploy test WASM contract
+        run: |
+          docker compose -f docker-compose.test.yml exec -T stellar-quickstart bash -c '
+            printf "\x00asm\x01\x00\x00\x00" > /tmp/test.wasm &&
+            stellar keys generate test-deployer --network standalone || true &&
+            curl -sf "http://localhost:8000/friendbot?addr=$(stellar keys address test-deployer)" > /dev/null &&
+            CONTRACT_ID=$(stellar contract deploy --wasm /tmp/test.wasm --source test-deployer --network standalone) &&
+            echo "Deployed test contract: $CONTRACT_ID"
+          ' >> "$GITHUB_ENV" || true
+
+      - name: Run integration tests
+        env:
+          TESTNET_RPC_URL: http://localhost:8000/soroban/rpc
+          ALLOW_HTTP: "true"
+          REDIS_URL: redis://localhost:6379
+        run: pnpm run test:integration
+
+      - name: Stop test containers
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
