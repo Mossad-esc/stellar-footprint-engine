@@ -11,8 +11,9 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        node-version: [18.x, 20.x, 22.x]
 
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +26,19 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store per Node.js version
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -39,7 +53,7 @@ jobs:
         run: pnpm test
 
       - name: Coverage
-        run: npm run test:coverage
+        run: pnpm run test:coverage
 
       - name: Build
         run: pnpm run build
