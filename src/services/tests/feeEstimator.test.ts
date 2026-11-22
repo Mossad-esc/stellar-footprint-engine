@@ -617,3 +617,289 @@ describe("maintenance operation fees", () => {
     );
   });
 });
+
+describe("edge cases and Stellar Core fee formula verification", () => {
+  const code = "AAAABwICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
+  const instance =
+    "AAAABgAAAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAABQAAAAB";
+  const settings = [
+    {
+      name: "configSettingContractComputeV0",
+      contractCompute: () => ({ feeRatePerInstructionsIncrement: () => "25" }),
+    },
+    {
+      name: "configSettingContractLedgerCostV0",
+      contractLedgerCost: () => ({
+        feeWriteLedgerEntry: () => "20",
+        feeDiskReadLedgerEntry: () => "10",
+        feeDiskRead1Kb: () => "50",
+      }),
+    },
+    {
+      name: "configSettingContractLedgerCostExtV0",
+      contractLedgerCostExt: () => ({ feeWrite1Kb: () => "100" }),
+    },
+    {
+      name: "configSettingContractHistoricalDataV0",
+      contractHistoricalData: () => ({ feeHistorical1Kb: () => "5" }),
+    },
+    {
+      name: "configSettingContractBandwidthV0",
+      contractBandwidth: () => ({ feeTxSize1Kb: () => "10" }),
+    },
+  ];
+  const mockSimulate = jest.fn();
+  const mockEntries = jest.fn();
+
+  beforeEach(() => {
+    (getRpcServer as jest.Mock).mockReturnValue({
+      getFeeStats: mockGetFeeStats,
+      simulateTransaction: mockSimulate,
+      getLedgerEntries: mockEntries,
+    });
+    mockEntries.mockResolvedValue({
+      entries: settings.map((setting) => ({
+        val: {
+          configSetting: () => ({
+            ...setting,
+            switch: () => ({ name: setting.name }),
+          }),
+        },
+      })),
+    });
+  });
+
+  function mockMaintenanceSimulation(
+    bytes: number,
+    fee: string,
+    restoring = true,
+  ) {
+    const keys = [instance, code].map((k) =>
+      StellarSdk.xdr.LedgerKey.fromXDR(k, "base64"),
+    );
+    const data = new StellarSdk.SorobanDataBuilder()
+      .setFootprint(restoring ? [] : keys, restoring ? keys : [])
+      .setResources(0, restoring ? bytes : 0, restoring ? bytes : 0)
+      .setResourceFee(fee);
+    mockSimulate.mockResolvedValue({
+      transactionData: data,
+      minResourceFee: fee,
+      latestLedger: 12345,
+    });
+  }
+
+  describe("zero instructions and zero memory bytes", () => {
+    it("computes only overhead fee when CPU and memory are zero in detailed breakdown", async () => {
+      mockFeeStats("100");
+      const detailed = await estimateFeeDetailed("0", "0", "testnet");
+
+      expect(detailed.breakdown.cpuFee).toBe("0");
+      expect(detailed.breakdown.memoryFee).toBe("0");
+      expect(detailed.breakdown.readFee).toBe("0");
+      expect(detailed.breakdown.overheadFee).toBe("60000");
+      expect(detailed.resourceFee).toBe("60000");
+      expect(detailed.totalStroops).toBe("60100");
+    });
+
+    it("falls back to minimum base fee when RPC returns 0 inclusion fee with zero resources", async () => {
+      mockFeeStats("0");
+      const result = await estimateFee("0", "0", "testnet");
+
+      expect(result.baseFee).toBe("100");
+      expect(result.resourceFee).toBe("60000");
+      expect(result.totalFee).toBe("60100");
+    });
+  });
+
+  describe("maximum contract CPU instructions boundary (100M)", () => {
+    it.each([
+      { cpu: "99999999", expectedCpuFee: "250000" },
+      { cpu: "100000000", expectedCpuFee: "250000" },
+      { cpu: "100000001", expectedCpuFee: "250025" },
+    ])(
+      "prices $cpu CPU instructions accurately at the 100M boundary",
+      async ({ cpu, expectedCpuFee }) => {
+        const detailed = await estimateFeeDetailed(cpu, "0", "testnet");
+        const simple = await estimateFee(cpu, "0", "testnet");
+
+        expect(detailed.breakdown.cpuFee).toBe(expectedCpuFee);
+        expect(detailed.resourceFee).toBe(
+          String(BigInt(expectedCpuFee) + 60000n),
+        );
+        expect(simple.resourceFee).toBe(detailed.resourceFee);
+        expect(simple.totalFee).toBe(detailed.totalStroops);
+      },
+    );
+  });
+
+  describe("fee-bump transaction envelopes", () => {
+    function buildFeeBumpXdr(op: StellarSdk.xdr.Operation): string {
+      const innerSource = StellarSdk.Keypair.random();
+      const feeSource = StellarSdk.Keypair.random();
+      const innerTx = new StellarSdk.TransactionBuilder(
+        new StellarSdk.Account(innerSource.publicKey(), "1"),
+        { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
+      )
+        .addOperation(op)
+        .setTimeout(30)
+        .build();
+      innerTx.sign(innerSource);
+
+      const feeBumpTx = StellarSdk.TransactionBuilder.buildFeeBumpTransaction(
+        feeSource.publicKey(),
+        "1000",
+        innerTx,
+        StellarSdk.Networks.TESTNET,
+      );
+      feeBumpTx.sign(feeSource);
+      return feeBumpTx.toXDR();
+    }
+
+    it("unwraps inner restoreFootprint transaction from a fee-bump envelope", async () => {
+      mockMaintenanceSimulation(1024, "10000", true);
+      const xdr = buildFeeBumpXdr(StellarSdk.Operation.restoreFootprint({}));
+
+      const result = await estimateFee("0", "0", "testnet", {
+        operationType: "restore",
+        xdr,
+      });
+
+      expect(result.operationType).toBe("restore");
+      expect(result.resourceFee).toBe("10000");
+      expect(result.baseFee).toBe("100");
+      expect(result.totalFee).toBe("10100");
+      const simulatedTx = mockSimulate.mock
+        .calls[0][0] as StellarSdk.Transaction;
+      expect(simulatedTx.operations[0].type).toBe("restoreFootprint");
+    });
+
+    it("unwraps inner extendFootprintTtl transaction from a fee-bump envelope", async () => {
+      mockMaintenanceSimulation(0, "5000", false);
+      const xdr = buildFeeBumpXdr(
+        StellarSdk.Operation.extendFootprintTtl({ extendTo: 2048 }),
+      );
+
+      const result = await estimateFee("0", "0", "testnet", {
+        operationType: "extend",
+        xdr,
+      });
+
+      expect(result.operationType).toBe("extend");
+      expect(result.breakdown?.writeFee).toBe("0");
+      expect(result.totalFee).toBe("5100");
+    });
+
+    it("rejects fee-bump envelope whose inner operation does not match operationType", async () => {
+      const xdr = buildFeeBumpXdr(StellarSdk.Operation.restoreFootprint({}));
+
+      await expect(
+        estimateFee("0", "0", "testnet", {
+          operationType: "extend",
+          xdr,
+        }),
+      ).rejects.toThrow(/extendFootprintTtl/);
+    });
+  });
+
+  describe("refundable vs non-refundable fee portions", () => {
+    it("partitions resource fee into writeFee, otherResourceFee, and refundableFee", async () => {
+      mockMaintenanceSimulation(2048, "15000", true);
+
+      const result = await estimateFee("0", "0", "testnet", {
+        operationType: "restore",
+        footprint: { readOnly: [], readWrite: [instance, code] },
+      });
+
+      const writeFee = BigInt(result.breakdown?.writeFee ?? "0");
+      const otherResourceFee = BigInt(
+        result.breakdown?.otherResourceFee ?? "0",
+      );
+      const refundableFee = BigInt(result.breakdown?.refundableFee ?? "0");
+
+      // 2 entries * 20 + ceil(2048 / 1024) * 100 = 40 + 200 = 240
+      expect(writeFee).toBe(240n);
+      expect(otherResourceFee).toBeGreaterThan(0n);
+      expect(refundableFee).toBe(15000n - writeFee - otherResourceFee);
+      expect(writeFee + otherResourceFee + refundableFee).toBe(
+        BigInt(result.resourceFee),
+      );
+    });
+
+    it("handles zero refundable fee when minResourceFee equals non-refundable fee", async () => {
+      // First call with generous fee to discover exact non-refundable cost
+      mockMaintenanceSimulation(1024, "100000", true);
+      const probe = await estimateFee("0", "0", "testnet", {
+        operationType: "restore",
+        footprint: { readOnly: [], readWrite: [instance, code] },
+      });
+      const nonRefundable =
+        BigInt(probe.breakdown?.writeFee ?? "0") +
+        BigInt(probe.breakdown?.otherResourceFee ?? "0");
+
+      mockMaintenanceSimulation(1024, nonRefundable.toString(), true);
+      const exact = await estimateFee("0", "0", "testnet", {
+        operationType: "restore",
+        footprint: { readOnly: [], readWrite: [instance, code] },
+      });
+
+      expect(exact.breakdown?.refundableFee).toBe("0");
+      expect(exact.resourceFee).toBe(nonRefundable.toString());
+    });
+
+    it("throws when RPC minResourceFee is below non-refundable network fee", async () => {
+      mockMaintenanceSimulation(1024, "1", true);
+
+      await expect(
+        estimateFee("0", "0", "testnet", {
+          operationType: "restore",
+          footprint: { readOnly: [], readWrite: [instance, code] },
+        }),
+      ).rejects.toThrow(/inconsistent with current network fee settings/);
+    });
+
+    it("rounds write and read fees up using 1024-byte increments", async () => {
+      mockMaintenanceSimulation(1025, "50000", true);
+
+      const result = await estimateFee("0", "0", "testnet", {
+        operationType: "restore",
+        footprint: { readOnly: [], readWrite: [instance, code] },
+      });
+
+      // ceil(1025 * 100 / 1024) = 101, plus 2 * 20 = 141
+      expect(result.breakdown?.writeFee).toBe("141");
+    });
+  });
+
+  describe("CAP-0046 Stellar Core fee formula verification", () => {
+    it.each([
+      { cpu: 1n, mem: 1n, p50: 100n },
+      { cpu: 10_000n, mem: 512n, p50: 250n },
+      { cpu: 10_001n, mem: 1_024n, p50: 500n },
+      { cpu: 50_000_000n, mem: 65_536n, p50: 1_200n },
+    ])(
+      "matches CAP-0046 resource fee formula for cpu=$cpu mem=$mem",
+      async ({ cpu, mem, p50 }) => {
+        mockFeeStats(p50.toString());
+        const expectedCpuFee = ((cpu + 9_999n) / 10_000n) * 25n;
+        const expectedMemFee = mem * 1_000n;
+        const expectedReadFee = mem * 250n;
+        const expectedOverhead = 300n * (100n + 100n);
+        const expectedResource =
+          expectedCpuFee + expectedMemFee + expectedReadFee + expectedOverhead;
+
+        const detailed = await estimateFeeDetailed(
+          cpu.toString(),
+          mem.toString(),
+          "testnet",
+        );
+
+        expect(detailed.breakdown.cpuFee).toBe(expectedCpuFee.toString());
+        expect(detailed.breakdown.memoryFee).toBe(expectedMemFee.toString());
+        expect(detailed.breakdown.readFee).toBe(expectedReadFee.toString());
+        expect(detailed.breakdown.overheadFee).toBe(expectedOverhead.toString());
+        expect(detailed.resourceFee).toBe(expectedResource.toString());
+        expect(detailed.totalStroops).toBe((p50 + expectedResource).toString());
+      },
+    );
+  });
+});

@@ -63,6 +63,38 @@ const cacheMissesTotal = new client.Counter({
   registers: [register],
 });
 
+const cacheOperationsTotal = new client.Counter({
+  name: "cache_operations_total",
+  help: "Total number of cache operations",
+  labelNames: ["tier", "operation", "status"],
+  registers: [register],
+});
+
+const cacheMemoryKeysCount = new client.Gauge({
+  name: "cache_memory_keys_count",
+  help: "Number of keys in the in-memory cache",
+  registers: [register],
+});
+
+const cacheMemoryBytesEstimate = new client.Gauge({
+  name: "cache_memory_bytes_estimate",
+  help: "Estimated memory usage of the in-memory cache in bytes",
+  registers: [register],
+});
+
+const cacheEvictionsTotal = new client.Counter({
+  name: "cache_evictions_total",
+  help: "Total number of cache evictions",
+  labelNames: ["tier"],
+  registers: [register],
+});
+
+const cacheEmergencyTrimsTotal = new client.Counter({
+  name: "cache_emergency_trims_total",
+  help: "Total number of emergency heap-pressure trims",
+  registers: [register],
+});
+
 // Tracking active simulations
 const activeSimulations = new client.Gauge({
   name: "active_simulations",
@@ -135,10 +167,12 @@ export function metricsMiddleware(
 export const metrics = {
   recordCacheHit: (cacheType: string = "simulation") => {
     cacheHitsTotal.inc({ cache_type: cacheType });
+    cacheOperationsTotal.inc({ tier: "memory", operation: "get", status: "hit" });
   },
 
   recordCacheMiss: (cacheType: string = "simulation") => {
     cacheMissesTotal.inc({ cache_type: cacheType });
+    cacheOperationsTotal.inc({ tier: "memory", operation: "get", status: "miss" });
   },
 
   recordCacheLatency: (
@@ -147,6 +181,30 @@ export const metrics = {
     durationSeconds: number,
   ) => {
     cacheOperationDuration.observe({ operation, backend }, durationSeconds);
+  },
+
+  recordCacheOperation: (
+    tier: "memory" | "redis",
+    operation: "get" | "set" | "delete" | "flush",
+    status: "hit" | "miss" | "success" | "error",
+  ) => {
+    cacheOperationsTotal.inc({ tier, operation, status });
+  },
+
+  recordMemoryCacheKeys: (count: number) => {
+    cacheMemoryKeysCount.set(count);
+  },
+
+  recordMemoryCacheBytes: (bytes: number) => {
+    cacheMemoryBytesEstimate.set(bytes);
+  },
+
+  recordCacheEviction: (tier: "memory" | "redis") => {
+    cacheEvictionsTotal.inc({ tier });
+  },
+
+  recordEmergencyTrim: () => {
+    cacheEmergencyTrimsTotal.inc();
   },
 
   recordSimulation: (network: string, success: boolean) => {

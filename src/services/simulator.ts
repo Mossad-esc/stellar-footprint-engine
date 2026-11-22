@@ -22,6 +22,7 @@ import {
 } from "../constants";
 import metrics from "../middleware/metrics";
 import { buildCacheKey, getCache } from "../services/cache";
+import { injectTraceHeaders, withSpan } from "../tracing";
 import {
   FootprintStats,
   AuthEntry,
@@ -36,7 +37,10 @@ import {
 } from "../types";
 import { rpcCircuitBreaker } from "../utils/circuitBreaker";
 import { withRetry } from "../utils/retry";
-import { sanitizeRpcError } from "../utils/rpcErrorSanitizer";
+import {
+  sanitizeRpcError,
+  type SanitizedRpcError,
+} from "../utils/rpcErrorSanitizer";
 
 /** Match TTL records by ledger key hash, never by RPC response position. */
 function isTtlKey(key: StellarSdk.xdr.LedgerKey): boolean {
@@ -261,6 +265,9 @@ export interface SimulateResult {
   cacheHit?: boolean;
   type?: string;
   warnings?: string[];
+  // Resource limit exceeded fields
+  remediation?: string;
+  resourceExceeded?: "cpu_instructions" | "memory_bytes" | "footprint_entries";
 }
 
 /**
@@ -279,15 +286,21 @@ async function _processSimulationResult(
     readWrite: footprintXdr.readWrite.map((e) => e.toXDR("base64")),
   };
 
-  const merged = mergeFootprints([rawFootprint]);
+  const merged = await withSpan("footprint.optimize", () =>
+    mergeFootprints([rawFootprint]),
+  );
   const { networkPassphrase } = getNetworkConfig(network);
-  const initial = parseFootprint(merged, networkPassphrase);
+  const initial = await withSpan("xdr.parseFootprint", () =>
+    parseFootprint(merged, networkPassphrase),
+  );
   const sacContracts = await detectSacContracts(
     [...initial.readOnly, ...initial.readWrite],
     server,
     networkPassphrase,
   );
-  const parsed = parseFootprint(merged, networkPassphrase, sacContracts);
+  const parsed = await withSpan("xdr.parseFootprint", () =>
+    parseFootprint(merged, networkPassphrase, sacContracts),
+  );
   const optimized =
     merged.readOnly.length + merged.readWrite.length <
     rawFootprint.readOnly.length + rawFootprint.readWrite.length;
@@ -360,7 +373,11 @@ export async function simulateTransaction(
   const cache = getCache();
   const cacheKey = buildCacheKey({ xdr, network, ledgerSequence });
 
-  const cached = await cache.get<SimulateResult>(cacheKey);
+  const cached = await withSpan(
+    "cache.get",
+    () => cache.get<SimulateResult>(cacheKey),
+    { "cache.key": cacheKey, "cache.backend": cache.backend },
+  );
   if (cached) {
     cached.cacheHit = true;
     metrics.recordCacheHit("simulation");
@@ -428,11 +445,14 @@ export async function simulateTransaction(
     includeEvents?: boolean;
     ledger?: number;
     cpuInstructions: number;
+    headers?: Record<string, string>;
   }
+  const rpcHeaders = injectTraceHeaders();
   const simOptions: SimulateOptions = {
     signal,
     includeEvents: true,
     cpuInstructions: 0,
+    ...(Object.keys(rpcHeaders).length > 0 ? { headers: rpcHeaders } : {}),
   };
   if (ledgerSequence !== undefined) {
     simOptions.ledger = ledgerSequence;
@@ -443,9 +463,14 @@ export async function simulateTransaction(
     response = await withRetry(
       () =>
         rpcCircuitBreaker.call(() =>
-          server.simulateTransaction(
-            tx as StellarSdk.Transaction,
-            simOptions as Parameters<typeof server.simulateTransaction>[1],
+          withSpan(
+            "rpc.simulateTransaction",
+            () =>
+              server.simulateTransaction(
+                tx as StellarSdk.Transaction,
+                simOptions as Parameters<typeof server.simulateTransaction>[1],
+              ),
+            { "stellar.network": network },
           ),
         ),
       `simulateTransaction:${network}`,
@@ -456,11 +481,19 @@ export async function simulateTransaction(
   }
 
   if (StellarSdk.rpc.Api.isSimulationError(response)) {
+    const sanitized: SanitizedRpcError = sanitizeRpcError(response.error);
+    // Determine specific error code based on resource exceeded
+    let errorCode = ErrorCode.RPC_SIMULATION_ERROR;
+    if (sanitized.resourceExceeded) {
+      errorCode = ErrorCode.RESOURCE_LIMIT_EXCEEDED;
+    }
     return {
       success: false,
       type: "simulation_error" as const,
-      error: sanitizeRpcError(response.error),
-      code: ErrorCode.RPC_SIMULATION_ERROR,
+      error: sanitized.message,
+      remediation: sanitized.remediation,
+      resourceExceeded: sanitized.resourceExceeded,
+      code: errorCode,
       raw: response,
     };
   }
@@ -542,6 +575,12 @@ export async function simulateTransaction(
       event.toXDR("base64"),
     ),
   };
+  const cacheTtlMs = parseInt(process.env.CACHE_TTL_MS || "60000", 10);
+  await withSpan(
+    "cache.set",
+    () => cache.set(cacheKey, result, cacheTtlMs),
+    { "cache.key": cacheKey, "cache.backend": cache.backend },
+  );
   return result;
 }
 

@@ -2,7 +2,7 @@ import path from "path";
 
 import { Network } from "@config/stellar";
 import metrics from "@middleware/metrics";
-import { getCache } from "@services/cache";
+import { getCache, invalidateContractCache } from "@services/cache";
 import { decodeXdr, type XdrType } from "@services/decoder";
 import {
   estimateFee,
@@ -13,6 +13,7 @@ import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { calculateFootprintStats } from "@services/footprintExtractor";
 import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
+import { getRpcStats } from "@services/rpcClient";
 import {
   simulateTransaction,
   simulateDryRun as analyzeDryRun,
@@ -606,6 +607,35 @@ export async function invalidateCache(
   }
 }
 
+export async function invalidateContractCacheController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { contractId } = req.params as { contractId?: string };
+    if (!contractId || contractId.trim() === "") {
+      return next(
+        new AppError(
+          "Missing required parameter: contractId",
+          HTTP_STATUS.BAD_REQUEST,
+        ),
+      );
+    }
+
+    const count = await invalidateContractCache(contractId);
+    res.status(HTTP_STATUS.OK).json({
+      message: `Invalidated ${count} cache entries for contract ${contractId}`,
+      contractId,
+      invalidatedCount: count,
+    });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
+}
+
 export async function estimateFeeController(
   req: Request,
   res: Response,
@@ -1111,4 +1141,35 @@ export function getSimulationJob(
     data: job,
   };
   res.status(HTTP_STATUS.OK).json(response);
+}
+
+// ---------------------------------------------------------------------------
+// #40 — GET /rpc/status — Live RPC pool stats and circuit breaker state
+// ---------------------------------------------------------------------------
+
+export function rpcStatus(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  try {
+    const adminKey = process.env.ADMIN_API_KEY;
+    if (adminKey) {
+      const provided =
+        (req.headers["x-admin-key"] as string | undefined) ||
+        (req.headers["authorization"] as string | undefined)?.replace(
+          "Bearer ",
+          "",
+        );
+      if (provided !== adminKey) {
+        return next(new AppError("Unauthorized", HTTP_STATUS.UNAUTHORIZED));
+      }
+    }
+    const stats = getRpcStats();
+    res.status(HTTP_STATUS.OK).json({ success: true, data: stats });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
 }

@@ -1,0 +1,34 @@
+Stellar Footprint Service has been deployed!
+
+1. Check pod status:
+   kubectl get pods -l "app.kubernetes.io/instance={{ .Release.Name }}"
+
+2. Get the service details:
+   kubectl get svc {{ include "stellar-footprint-service.fullname" . }}
+
+3. Port-forward to test locally:
+   kubectl port-forward svc/{{ include "stellar-footprint-service.fullname" . }} 8080:{{ .Values.service.port }}
+
+4. Verify health:
+   curl http://localhost:8080/api/v1/health/ready
+
+{{- if .Values.ingress.enabled }}
+
+5. Ingress is enabled. Access the service at:
+{{- range .Values.ingress.hosts }}
+   {{- if $.Values.ingress.tls }}
+   https://{{ .host }}
+   {{- else }}
+   http://{{ .host }}
+   {{- end }}
+{{- end }}
+
+   Ensure the cert-manager ClusterIssuer referenced in the annotations is installed.
+{{- end }}
+
+{{- if .Values.autoscaling.enabled }}
+
+6. HPA is enabled ({{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }} replicas, target CPU {{ .Values.autoscaling.targetCPUUtilizationPercentage }}%).
+   Check status:
+   kubectl get hpa {{ include "stellar-footprint-service.fullname" . }}
+{{- end }}

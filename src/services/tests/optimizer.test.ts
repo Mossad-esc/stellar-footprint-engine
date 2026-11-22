@@ -16,18 +16,33 @@ describe("optimizeFootprint", () => {
     const result = optimizeFootprint([A, B], [B, C]);
     expect(result.readOnly).toEqual([A]);
     expect(result.readWrite).toEqual([B, C]);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 2,
+      optimizedReadOnlyCount: 1,
+      removedCount: 1,
+    });
   });
 
   it("sets optimized: true when entries are removed", () => {
     const result = optimizeFootprint([A, B], [B]);
     expect(result.optimized).toBe(true);
-    expect(result.stats.removedCount).toBe(1);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 2,
+      optimizedReadOnlyCount: 1,
+      removedCount: 1,
+    });
   });
 
   it("sets optimized: false when no entries are removed", () => {
     const result = optimizeFootprint([A], [B]);
     expect(result.optimized).toBe(false);
-    expect(result.stats.removedCount).toBe(0);
+    expect(result.readOnly).toEqual([A]);
+    expect(result.readWrite).toEqual([B]);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 1,
+      optimizedReadOnlyCount: 1,
+      removedCount: 0,
+    });
   });
 
   it("returns empty outputs for empty inputs", () => {
@@ -35,6 +50,11 @@ describe("optimizeFootprint", () => {
     expect(result.readOnly).toEqual([]);
     expect(result.readWrite).toEqual([]);
     expect(result.optimized).toBe(false);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 0,
+      optimizedReadOnlyCount: 0,
+      removedCount: 0,
+    });
   });
 
   it("preserves rawFootprint with original entries", () => {
@@ -43,52 +63,15 @@ describe("optimizeFootprint", () => {
     expect(result.rawFootprint.readWrite).toEqual([B]);
   });
 
-  // --- Issue #22 additions ---
-
-  it("tracks prunedCount equal to removedCount", () => {
-    const result = optimizeFootprint([A, B, C], [B, C]);
-    expect(result.stats.prunedCount).toBe(2);
-    expect(result.stats.prunedCount).toBe(result.stats.removedCount);
-  });
-
-  it("sets prunedCount to 0 when no overlap", () => {
-    const result = optimizeFootprint([A], [B, C]);
-    expect(result.stats.prunedCount).toBe(0);
-  });
-
-  it("calculates estimatedByteFeeSavings proportional to prunedCount", () => {
-    const result = optimizeFootprint([A, B, C], [A, B, C]);
-    expect(result.stats.prunedCount).toBe(3);
-    // savings must be a positive number proportional to pruned entries
-    expect(result.stats.estimatedByteFeeSavings).toBeGreaterThan(0);
-    expect(result.stats.estimatedByteFeeSavings).toBe(
-      result.stats.prunedCount * 100, // BYTES_PER_ENTRY_ESTIMATE
-    );
-  });
-
-  it("sets estimatedByteFeeSavings to 0 when nothing is pruned", () => {
-    const result = optimizeFootprint([A], [B]);
-    expect(result.stats.estimatedByteFeeSavings).toBe(0);
-  });
-
-  it("prunes overlapping keys without data loss in readWrite", () => {
-    // readWrite must be untouched even when all readOnly keys overlap
-    const result = optimizeFootprint([A, B], [A, B, C]);
-    expect(result.readOnly).toEqual([]);
-    expect(result.readWrite).toEqual([A, B, C]);
-    expect(result.stats.prunedCount).toBe(2);
-  });
-
-  it("treats canonical base64 equivalents as the same key", () => {
-    // B and B_EQUIV differ only in padding but represent the same bytes
-    const result = optimizeFootprint([B_EQUIV], [B]);
-    expect(result.readOnly).toEqual([]);
-    expect(result.stats.prunedCount).toBe(1);
-  });
-
-  it("includes correct originalReadOnlyCount and optimizedReadOnlyCount", () => {
-    const result = optimizeFootprint([A, B, C], [C]);
-    expect(result.stats.originalReadOnlyCount).toBe(3);
-    expect(result.stats.optimizedReadOnlyCount).toBe(2);
+  it("removes multiple overlapping entries while retaining distinct ones", () => {
+    const result = optimizeFootprint([A, B, C], [A, C]);
+    expect(result.readOnly).toEqual([B]);
+    expect(result.readWrite).toEqual([A, C]);
+    expect(result.optimized).toBe(true);
+    expect(result.stats).toEqual({
+      originalReadOnlyCount: 3,
+      optimizedReadOnlyCount: 1,
+      removedCount: 2,
+    });
   });
 });

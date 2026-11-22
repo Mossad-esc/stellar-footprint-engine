@@ -57,6 +57,14 @@ class RedisCounterStore implements CounterStore {
   async delete(key: string): Promise<void> {
     await this.client.del(this.prefixed(key));
   }
+
+  async close(): Promise<void> {
+    try {
+      await this.client.quit();
+    } catch {
+      this.client.disconnect();
+    }
+  }
 }
 
 let _store: CounterStore | null = null;
@@ -108,4 +116,14 @@ export function getCounterStore(): CounterStore {
   }
 
   return _store;
+}
+
+/**
+ * Gracefully close the active counter store Redis client on shutdown.
+ */
+export async function closeCounterStore(): Promise<void> {
+  if (_store instanceof RedisCounterStore) {
+    await _store.close();
+  }
+  _store = null;
 }

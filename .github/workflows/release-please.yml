@@ -11,14 +11,24 @@ permissions:
 
 jobs:
   release-please:
+    name: Release Please
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      html_url: ${{ steps.release.outputs.html_url }}
     steps:
-      - uses: googleapis/release-please-action@v5
+      - name: Run Release Please
+        uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Summarize created release
+        if: steps.release.outputs.release_created == 'true'
+        run: |
+          echo "### Release Created" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tag:** \`${{ steps.release.outputs.tag_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **URL:** ${{ steps.release.outputs.html_url }}" >> "$GITHUB_STEP_SUMMARY"
