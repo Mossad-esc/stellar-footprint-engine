@@ -89,7 +89,14 @@ export enum ErrorCode {
   CIRCUIT_OPEN = "CIRCUIT_OPEN",
   JOB_NOT_FOUND = "JOB_NOT_FOUND",
   UNAUTHORIZED = "UNAUTHORIZED",
+  XDR_DEPTH_EXCEEDED = "XDR_DEPTH_EXCEEDED",
 }
+
+/** Maximum allowed recursion depth when decoding nested XDR ScVal/LedgerKey structures. */
+export const MAX_XDR_DEPTH = 32;
+
+/** Maximum allowed total node count when decoding recursive XDR structures. */
+export const MAX_XDR_NODES = 5000;
 
 export const ERROR_MESSAGES = {
   MISSING_XDR: "Missing required field: xdr",

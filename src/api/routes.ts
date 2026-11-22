@@ -6,11 +6,7 @@ import {
   decodeRateLimiter,
   feeRateLimiter,
 } from "../middleware/rateLimiter";
-import {
-  simulateRateLimiter,
-  decodeRateLimiter,
-  feeRateLimiter,
-} from "../middleware/rateLimiter";
+import { requireScope } from "../middleware/apiKeyAuth";
 import {
   health,
   liveness,
@@ -66,10 +62,14 @@ router.get("/simulate/history", getSimulateHistory);
 router.get("/simulate/jobs/:jobId", getSimulationJob);
 
 // POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
-router.post("/simulate/batch", simulateBatch);
+router.post("/simulate/batch", requireScope("simulate:batch"), simulateBatch);
 
 // GET /simulate/batch/stream — SSE endpoint for real-time batch simulation status
-router.get("/simulate/batch/stream", simulateBatchStream);
+router.get(
+  "/simulate/batch/stream",
+  requireScope("simulate:batch"),
+  simulateBatchStream,
+);
 
 // GET /simulate/cost-breakdown — accepts ?cpuInsns=&memBytes=&network= and returns detailed cost breakdown
 router.get("/simulate/cost-breakdown", costBreakdownController);
@@ -96,10 +96,14 @@ router.post("/restore", restore);
 router.post("/estimate-fee", feeRateLimiter, estimateFeeController);
 
 // DELETE /cache — flush all cache entries (Redis or in-memory)
-router.delete("/cache", invalidateCache);
+router.delete("/cache", requireScope("admin:cache"), invalidateCache);
 
 // DELETE /cache/contract/:contractId — invalidate cache entries for a specific contract
-router.delete("/cache/contract/:contractId", invalidateContractCacheController);
+router.delete(
+  "/cache/contract/:contractId",
+  requireScope("admin:cache"),
+  invalidateContractCacheController,
+);
 
 // GET /openapi.json — serve raw OpenAPI spec as JSON
 router.get("/openapi.json", staticCacheMiddleware, openApiSpec);

@@ -1,5 +1,25 @@
 import { ErrorCode } from "./constants";
 
+/**
+ * A single configured API key together with the scopes it grants.
+ * Used by the RBAC-aware API key auth middleware.
+ */
+export interface ScopedApiKey {
+  /** The raw API key value presented by the client. */
+  key: string;
+  /** Granular permissions granted to this key (e.g. "simulate:read", "admin:cache"). */
+  scopes: string[];
+}
+
+/**
+ * Scopes that can be granted to an API key.
+ */
+export type ApiKeyScope =
+  | "simulate:read"
+  | "simulate:batch"
+  | "admin:cache"
+  | "admin:metrics";
+
 export interface ResponseEnvelope<T = unknown> {
   success: boolean;
   data?: T;
@@ -241,4 +261,14 @@ export interface BatchSimulationItem extends SimulationEnvelope {
 
 export interface BatchSimulationResponse {
   results: BatchSimulationItem[];
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      /** Scopes granted to the authenticated API key, attached by apiKeyAuth. */
+      apiKeyScopes?: string[];
+    }
+  }
 }

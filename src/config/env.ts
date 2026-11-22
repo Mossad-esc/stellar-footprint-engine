@@ -43,6 +43,9 @@ export const EnvSchema = z.object({
   FEE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   BATCH_CONCURRENCY: z.coerce.number().int().positive().default(5),
   BATCH_MAX_SIZE: z.coerce.number().int().positive().default(10),
+  API_KEYS_CONFIG: z.string().default(""),
+  API_KEYS: z.string().default(""),
+  WEBHOOK_SECRET: z.string().default(""),
 });
 
 export type EnvConfig = z.infer<typeof EnvSchema>;
@@ -75,3 +78,62 @@ export function validateEnv(raw: NodeJS.ProcessEnv): EnvConfig {
 }
 
 export const env: EnvConfig = validateEnv(process.env);
+
+/**
+ * Parse the configured API keys into a Map of key -> scopes.
+ *
+ * Primary source is `API_KEYS_CONFIG`, a JSON object mapping each API key to
+ * an array of scopes, e.g.:
+ *   {"key-abc": ["simulate:read", "simulate:batch"], "key-admin": ["admin:cache"]}
+ *
+ * Legacy `API_KEYS` (comma-separated list of keys) is supported as a fallback
+ * and yields unscoped keys (empty scope array).
+ */
+export function parseApiKeysConfig(
+  config: EnvConfig = env,
+): Map<string, string[]> {
+  const keys = new Map<string, string[]>();
+
+  const rawConfig = config.API_KEYS_CONFIG?.trim();
+  if (rawConfig) {
+    try {
+      const parsed: unknown = JSON.parse(rawConfig);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        for (const [key, scopes] of Object.entries(
+          parsed as Record<string, unknown>,
+        )) {
+          if (!key) continue;
+          const scopeList = Array.isArray(scopes)
+            ? scopes.filter((s): s is string => typeof s === "string")
+            : typeof scopes === "string"
+              ? scopes
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+              : [];
+          keys.set(key, scopeList);
+        }
+      } else {
+        logger.warn(
+          "API_KEYS_CONFIG must be a JSON object mapping keys to scope arrays",
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        `Failed to parse API_KEYS_CONFIG: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  const legacyKeys = config.API_KEYS?.trim();
+  if (legacyKeys) {
+    for (const key of legacyKeys.split(",")) {
+      const trimmed = key.trim();
+      if (trimmed && !keys.has(trimmed)) {
+        keys.set(trimmed, []);
+      }
+    }
+  }
+
+  return keys;
+}

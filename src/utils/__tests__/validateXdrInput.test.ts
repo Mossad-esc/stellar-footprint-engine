@@ -74,4 +74,63 @@ describe("validateXdrInput", () => {
     const result = validateXdrInput(v1Xdr);
     expect(result.code).not.toBe(ErrorCode.UNSUPPORTED_ENVELOPE_TYPE);
   });
+
+  // --- Issue #78: recursive depth & node count limits ---
+
+  it("rejects a deeply nested XDR payload exceeding MAX_XDR_DEPTH", () => {
+    const deeplyNested = buildNestedXdr(MAX_XDR_DEPTH + 1);
+    const result = validateXdrInput(deeplyNested);
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe(ErrorCode.XDR_DEPTH_EXCEEDED);
+    expect(result.error).toMatch(/depth/i);
+  });
+
+  it("rejects a bloated recursive XDR payload exceeding MAX_XDR_NODES", () => {
+    const bloated = buildBloatedXdr(MAX_XDR_NODES + 1);
+    const result = validateXdrInput(bloated);
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe(ErrorCode.XDR_DEPTH_EXCEEDED);
+    expect(result.error).toMatch(/node/i);
+  });
+
+  it("does not throw a stack overflow on deeply nested input", () => {
+    const deeplyNested = buildNestedXdr(MAX_XDR_DEPTH * 10);
+    expect(() => validateXdrInput(deeplyNested)).not.toThrow();
+    const result = validateXdrInput(deeplyNested);
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe(ErrorCode.XDR_DEPTH_EXCEEDED);
+  });
+
+  it("still accepts a valid payload within depth and node limits", () => {
+    expect(validateXdrInput(VALID_XDR)).toEqual({ valid: true });
+  });
 });
+
+// --- Helpers for crafting malicious XDR payloads ---
+
+/**
+ * Builds a base64 XDR string representing a deeply nested structure.
+ * Each nesting level is encoded as a 4-byte int32 marker so the guard's
+ * depth tracking is exercised during recursive decoding.
+ */
+function buildNestedXdr(depth: number): string {
+  const buf = Buffer.alloc(4 + depth * 4);
+  buf.writeInt32BE(2, 0); // envelopeTypeTx (v1) so we don't trip the v0 check
+  for (let i = 0; i < depth; i++) {
+    buf.writeInt32BE(1, 4 + i * 4); // nested marker per level
+  }
+  return buf.toString("base64");
+}
+
+/**
+ * Builds a base64 XDR string representing a wide (bloated) structure with
+ * the given number of total nodes, staying within the depth limit.
+ */
+function buildBloatedXdr(nodes: number): string {
+  const buf = Buffer.alloc(4 + nodes * 4);
+  buf.writeInt32BE(2, 0); // envelopeTypeTx (v1)
+  for (let i = 0; i < nodes; i++) {
+    buf.writeInt32BE(1, 4 + i * 4);
+  }
+  return buf.toString("base64");
+}

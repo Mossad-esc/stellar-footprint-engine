@@ -14,7 +14,107 @@ import { Request, Response, NextFunction } from "express";
  */
 export const WEBHOOK_SIGNATURE_HEADER = "x-webhook-signature";
 
+/**
+ * Header used for timestamped HMAC-SHA256 signatures on outgoing webhooks.
+ * Format: `t=<unix-seconds>,v1=<hex-hmac-sha256>`.
+ */
+export const SIGNATURE_SHA256_HEADER = "x-signature-sha256";
+
+/** Default tolerance (in seconds) for timestamped signature verification. */
+export const DEFAULT_SIGNATURE_TOLERANCE_SECONDS = 300;
+
+export interface VerifyWebhookSignatureOptions {
+  /** Maximum allowed age of the timestamp, in seconds. Defaults to 300. */
+  toleranceSeconds?: number;
+  /** Current time in seconds since epoch. Defaults to `Date.now() / 1000`. */
+  now?: number;
+}
+
+/**
+ * Computes the timestamped HMAC-SHA256 signature for a payload.
+ *
+ * The signed message is `${timestamp}.${payload}`, matching the
+ * Stripe/GitHub webhook signature convention.
+ */
+export function computeWebhookSignature(
+  payload: string | Buffer,
+  secret: string,
+  timestamp: number,
+): string {
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.`)
+    .update(payload)
+    .digest("hex");
+}
+
+/**
+ * Parses a `t=<timestamp>,v1=<signature>` header value.
+ * Returns `null` when the header is malformed.
+ */
+export function parseSignatureHeader(
+  header: string,
+): { timestamp: number; signature: string } | null {
+  let timestamp: number | undefined;
+  let signature: string | undefined;
+
+  for (const part of header.split(",")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+
+    if (key === "t") {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return null;
+      timestamp = parsed;
+    } else if (key === "v1") {
+      signature = value;
+    }
+  }
+
+  if (timestamp === undefined || !signature) return null;
+
+  return { timestamp, signature };
+}
+
+/**
+ * Verifies a timestamped HMAC-SHA256 webhook signature using constant-time
+ * comparison.
+ *
+ * Returns `true` only when the header is well-formed, the timestamp is within
+ * the allowed tolerance, and the recomputed signature matches.
+ */
+export function verifyWebhookSignature(
+  payload: string | Buffer,
+  header: string | undefined | null,
+  secret: string,
+  options: VerifyWebhookSignatureOptions = {},
+): boolean {
+  if (!header || !secret) return false;
+
+  const parsed = parseSignatureHeader(header);
+  if (!parsed) return false;
+
+  const tolerance =
+    options.toleranceSeconds ?? DEFAULT_SIGNATURE_TOLERANCE_SECONDS;
+  const now = options.now ?? Math.floor(Date.now() / 1000);
+
+  if (Math.abs(now - parsed.timestamp) > tolerance) return false;
+
+  const expected = computeWebhookSignature(payload, secret, parsed.timestamp);
+
+  const sigBuffer = Buffer.from(parsed.signature, "utf8");
+  const expBuffer = Buffer.from(expected, "utf8");
+
+  if (sigBuffer.length !== expBuffer.length) return false;
+
+  return crypto.timingSafeEqual(sigBuffer, expBuffer);
+}
+
 export function hmacVerify(
+=======
   req: Request,
   res: Response,
   next: NextFunction,

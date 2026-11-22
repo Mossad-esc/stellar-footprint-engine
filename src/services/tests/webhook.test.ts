@@ -1,5 +1,6 @@
 import { createHmac } from "crypto";
 
+import { verifySignature } from "../../middleware/hmacVerify";
 import {
   createJob,
   deliverWebhook,
@@ -55,7 +56,7 @@ describe("webhook service", () => {
     );
   });
 
-  it("delivers signed webhook payload with X-Webhook-Signature when WEBHOOK_SECRET is set", async () => {
+  it("delivers signed webhook payload with X-Signature-SHA256 when WEBHOOK_SECRET is set", async () => {
     process.env.WEBHOOK_SECRET = "super-secret";
     const mockFetch = jest.fn().mockResolvedValue({ ok: true });
     global.fetch = mockFetch as unknown as typeof fetch;
@@ -69,18 +70,39 @@ describe("webhook service", () => {
     expect(job?.completedAt).toBeDefined();
 
     const expectedBody = JSON.stringify({ jobId, ...MOCK_SIMULATE_RESULT });
-    const expectedSig = createHmac("sha256", "super-secret")
-      .update(expectedBody)
-      .digest("hex");
 
-    expect(mockFetch).toHaveBeenCalledWith("https://example.com/hook", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Webhook-Signature": `sha256=${expectedSig}`,
-      },
-      body: expectedBody,
-    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://example.com/hook");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(expectedBody);
+    expect(init.headers["Content-Type"]).toBe("application/json");
+
+    const signatureHeader = init.headers["X-Signature-SHA256"];
+    expect(typeof signatureHeader).toBe("string");
+
+    const match = /^t=(\d+),v1=([0-9a-f]{64})$/.exec(signatureHeader);
+    expect(match).not.toBeNull();
+
+    const timestamp = Number(match![1]);
+    const signature = match![2];
+    expect(Number.isFinite(timestamp)).toBe(true);
+
+    const expectedSig = createHmac("sha256", "super-secret")
+      .update(`${timestamp}.${expectedBody}`)
+      .digest("hex");
+    expect(signature).toBe(expectedSig);
+  });
+
+  it("omits X-Signature-SHA256 when WEBHOOK_SECRET is not set", async () => {
+    const mockFetch = jest.fn().mockResolvedValue({ ok: true });
+    global.fetch = mockFetch as unknown as typeof fetch;
+
+    const jobId = createJob("https://example.com/hook");
+    await deliverWebhook(jobId, MOCK_SIMULATE_RESULT);
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers["X-Signature-SHA256"]).toBeUndefined();
   });
 
   it("retries failed deliveries and marks job failed when retries are exhausted", async () => {
@@ -105,5 +127,51 @@ describe("webhook service", () => {
     failJob(jobId);
     expect(getJob(jobId)?.status).toBe("failed");
     expect(getJob(jobId)?.completedAt).toBeDefined();
+  });
+});
+
+describe("verifySignature", () => {
+  const SECRET = "super-secret";
+  const PAYLOAD = JSON.stringify({ hello: "world" });
+
+  function sign(timestamp: number, payload: string, secret = SECRET): string {
+    const sig = createHmac("sha256", secret)
+      .update(`${timestamp}.${payload}`)
+      .digest("hex");
+    return `t=${timestamp},v1=${sig}`;
+  }
+
+  it("accepts a valid signature", () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const header = sign(timestamp, PAYLOAD);
+
+    expect(verifySignature(PAYLOAD, header, SECRET)).toBe(true);
+  });
+
+  it("rejects a tampered payload", () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const header = sign(timestamp, PAYLOAD);
+
+    expect(verifySignature(`${PAYLOAD} `, header, SECRET)).toBe(false);
+  });
+
+  it("rejects a signature computed with a different secret", () => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const header = sign(timestamp, PAYLOAD, "wrong-secret");
+
+    expect(verifySignature(PAYLOAD, header, SECRET)).toBe(false);
+  });
+
+  it("rejects a stale timestamp outside the tolerance window", () => {
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 3600;
+    const header = sign(staleTimestamp, PAYLOAD);
+
+    expect(verifySignature(PAYLOAD, header, SECRET)).toBe(false);
+  });
+
+  it("rejects malformed signature headers", () => {
+    expect(verifySignature(PAYLOAD, "", SECRET)).toBe(false);
+    expect(verifySignature(PAYLOAD, "garbage", SECRET)).toBe(false);
+    expect(verifySignature(PAYLOAD, "t=abc,v1=def", SECRET)).toBe(false);
   });
 });

@@ -78,12 +78,16 @@ export function failJob(jobId: string): void {
 
 /**
  * Sign a payload with HMAC-SHA256 using WEBHOOK_SECRET env var.
+ * The signed message is `${timestamp}.${payload}`, following the
+ * timestamped signature scheme used by Stripe/GitHub webhooks.
  * Returns hex digest, or empty string if no secret is configured.
  */
-function signPayload(payload: string): string {
+function signPayload(payload: string, timestamp: number): string {
   const secret = process.env.WEBHOOK_SECRET;
   if (!secret) return "";
-  return createHmac("sha256", secret).update(payload).digest("hex");
+  return createHmac("sha256", secret)
+    .update(`${timestamp}.${payload}`)
+    .digest("hex");
 }
 
 /**
@@ -98,7 +102,8 @@ export async function deliverWebhook(
   if (!job) return;
 
   const payload = JSON.stringify({ jobId, ...result });
-  const signature = signPayload(payload);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = signPayload(payload, timestamp);
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     job.attempts = attempt;
@@ -107,7 +112,7 @@ export async function deliverWebhook(
         "Content-Type": "application/json",
       };
       if (signature) {
-        headers["X-Webhook-Signature"] = `sha256=${signature}`;
+        headers["X-Signature-SHA256"] = `t=${timestamp},v1=${signature}`;
       }
 
       const res = await fetch(job.webhookUrl, {
