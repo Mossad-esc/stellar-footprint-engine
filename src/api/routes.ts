@@ -19,6 +19,7 @@ import {
   supportedNetworks,
   simulateDryRun,
   getSimulateHistory,
+  rpcGateway,
 } from "./controllers";
 import {
   simulateRateLimiter,
@@ -78,6 +79,9 @@ router.post("/estimate-fee", feeRateLimiter, estimateFeeController);
 
 // DELETE /cache — flush all cache entries (Redis or in-memory)
 router.delete("/cache", invalidateCache);
+
+// POST /rpc — JSON-RPC 2.0 gateway
+router.post("/rpc", rpcGateway);
 
 // GET /openapi.json — serve raw OpenAPI spec as JSON
 router.get("/openapi.json", openApiSpec);

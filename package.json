@@ -36,7 +36,8 @@
     "test:coverage": "jest --coverage",
     "test:integration": "docker compose -f docker-compose.test.yml up -d && jest --testPathPattern='integration|simulate' && docker compose -f docker-compose.test.yml down",
     "prepare": "husky",
-    "load-test": "node scripts/load-test.js"
+    "load-test": "node scripts/load-test.js",
+    "lint:openapi": "npx @redocly/cli lint openapi.yaml"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^17.4.0",
