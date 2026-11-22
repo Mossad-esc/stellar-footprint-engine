@@ -1,0 +1,17 @@
+meta {
+  name: Get Simulation Job
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/simulate/jobs/00000000-0000-0000-0000-000000000000
+  body: none
+  auth: none
+}
+
+tests {
+  test("should return job status or 404 when not found", function () {
+    expect([200, 404]).to.include(res.getStatus());
+  });
+}

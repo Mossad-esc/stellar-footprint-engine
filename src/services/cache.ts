@@ -443,6 +443,14 @@ class RedisCache implements CacheService {
     metrics.recordCacheEviction("redis");
     return keys.length;
   }
+
+  async close(): Promise<void> {
+    try {
+      await this.client.quit();
+    } catch {
+      this.client.disconnect();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +512,15 @@ export function getCache(): CacheService {
         // The retryStrategy handles reconnection; we just log
       });
 
+      // Auto-recover: when the client reconnects after an outage, restore the
+      // Redis backend so subsequent writes go to Redis instead of memory.
+      // The "ready" event fires after the initial connect and after every
+      // successful reconnection (ioredis handles reconnection automatically).
+      client.on("ready", () => {
+        logger.info("Redis cache ready — restoring Redis backend");
+        _cache = new RedisCache(client);
+      });
+
       _cache = new RedisCache(client);
       logger.info({ url: redisUrl }, "Cache backend: Redis");
     } catch (err) {
@@ -527,12 +544,13 @@ export function setCache(instance: CacheService): void {
 }
 
 /**
- * Invalidate all cache entries associated with a contract ID.
- * Delegates to the active backend's implementation.
+ * Gracefully close the active cache backend (e.g. Redis socket) on shutdown.
  */
-export async function invalidateContractCache(contractId: string): Promise<number> {
-  const cache = getCache();
-  return cache.invalidateContractCache(contractId);
+export async function closeCache(): Promise<void> {
+  if (_cache instanceof RedisCache) {
+    await _cache.close();
+  }
+  _cache = null;
 }
 
 // ---------------------------------------------------------------------------

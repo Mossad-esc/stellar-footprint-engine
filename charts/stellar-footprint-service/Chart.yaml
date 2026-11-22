@@ -1,0 +1,14 @@
+apiVersion: v2
+name: stellar-footprint-service
+description: Production Helm chart for the Stellar Footprint Engine — a Soroban transaction simulation and footprint extraction service
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - stellar
+  - soroban
+  - footprint
+  - rpc
+  - blockchain
+maintainers:
+  - name: Stellar Footprint Engine Maintainers

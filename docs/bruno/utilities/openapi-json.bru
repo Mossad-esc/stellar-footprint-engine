@@ -1,0 +1,18 @@
+meta {
+  name: OpenAPI Specification
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/openapi.json
+  body: none
+  auth: none
+}
+
+tests {
+  test("should return 200 OK with OpenAPI JSON", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().openapi).to.be.a("string");
+  });
+}

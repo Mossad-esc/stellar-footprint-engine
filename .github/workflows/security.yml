@@ -9,6 +9,23 @@ on:
     - cron: "0 6 * * 1" # weekly on Monday
 
 jobs:
+  pnpm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+          cache: pnpm
+
+      - name: Run pnpm audit (high/critical gate)
+        run: pnpm audit --audit-level=high
+
   dependency-check:
     runs-on: ubuntu-latest
     steps:
