@@ -1,6 +1,9 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
+import express from "express";
+import request from "supertest";
 
 import { clearRpcPool } from "../../config/stellar";
+import { errorHandler } from "../../middleware/errorHandler";
 import { simulateTransaction } from "../../services/simulator";
 import {
   contractDataKey,
@@ -306,5 +309,108 @@ describe("simulateTransaction Integration Tests", () => {
       expect(result.cost?.cpuInsns).toBeDefined();
       expect(result.cost?.memBytes).toBeDefined();
     });
+  });
+});
+
+/**
+ * Integration tests for request body payload size limits.
+ * Verifies that batch endpoints enforce a 2MB JSON limit and non-batch
+ * endpoints enforce a 250kb limit, returning a standard 413 error envelope.
+ */
+describe("Request Body Payload Size Limits", () => {
+  const BATCH_LIMIT = "2mb";
+  const STANDARD_LIMIT = "250kb";
+
+  function buildApp(): express.Express {
+    const app = express();
+    const batchJson = express.json({ limit: BATCH_LIMIT });
+    const standardJson = express.json({ limit: STANDARD_LIMIT });
+
+    app.post("/simulate/batch", batchJson, (_req, res) => {
+      res.status(200).json({ success: true });
+    });
+    app.post("/simulate", standardJson, (_req, res) => {
+      res.status(200).json({ success: true });
+    });
+
+    app.use(errorHandler);
+    return app;
+  }
+
+  /**
+   * Builds a JSON string of approximately the requested byte size.
+   */
+  function buildPayload(sizeBytes: number): string {
+    const prefix = '{"transactions":["';
+    const suffix = '"]}';
+    const fillerLength = Math.max(
+      0,
+      sizeBytes - prefix.length - suffix.length,
+    );
+    return `${prefix}${"a".repeat(fillerLength)}${suffix}`;
+  }
+
+  it("rejects batch payloads exceeding the 2MB limit with 413", async () => {
+    const app = buildApp();
+    const oversized = buildPayload(2 * 1024 * 1024 + 1024);
+
+    const response = await request(app)
+      .post("/simulate/batch")
+      .set("Content-Type", "application/json")
+      .send(oversized);
+
+    expect(response.status).toBe(413);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: expect.objectContaining({
+        code: expect.any(String),
+        message: expect.any(String),
+      }),
+    });
+  });
+
+  it("accepts batch payloads under the 2MB limit", async () => {
+    const app = buildApp();
+    const underLimit = buildPayload(1024 * 1024);
+
+    const response = await request(app)
+      .post("/simulate/batch")
+      .set("Content-Type", "application/json")
+      .send(underLimit);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true });
+  });
+
+  it("rejects non-batch payloads exceeding the 250kb limit with 413", async () => {
+    const app = buildApp();
+    const oversized = buildPayload(250 * 1024 + 1024);
+
+    const response = await request(app)
+      .post("/simulate")
+      .set("Content-Type", "application/json")
+      .send(oversized);
+
+    expect(response.status).toBe(413);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: expect.objectContaining({
+        code: expect.any(String),
+        message: expect.any(String),
+      }),
+    });
+  });
+
+  it("accepts non-batch payloads under the 250kb limit", async () => {
+    const app = buildApp();
+    const underLimit = buildPayload(100 * 1024);
+
+    const response = await request(app)
+      .post("/simulate")
+      .set("Content-Type", "application/json")
+      .send(underLimit);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true });
   });
 });

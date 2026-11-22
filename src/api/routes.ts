@@ -28,6 +28,7 @@ import {
   supportedNetworks,
   simulateDryRun,
   getSimulateHistory,
+  rpcGateway,
   rpcStatus,
 } from "./controllers";
 
@@ -98,6 +99,8 @@ router.post("/estimate-fee", feeRateLimiter, estimateFeeController);
 // DELETE /cache — flush all cache entries (Redis or in-memory)
 router.delete("/cache", requireScope("admin:cache"), invalidateCache);
 
+// POST /rpc — JSON-RPC 2.0 gateway
+router.post("/rpc", rpcGateway);
 // DELETE /cache/contract/:contractId — invalidate cache entries for a specific contract
 router.delete(
   "/cache/contract/:contractId",

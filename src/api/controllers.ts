@@ -990,25 +990,35 @@ export function getSimulateHistory(
       req.socket.remoteAddress ||
       "unknown";
 
-    const limitParam = parseInt((req.query.limit as string) || "10", 10);
-    const limit =
-      isNaN(limitParam) || limitParam < 1
-        ? 10
-        : Math.min(limitParam, HISTORY_MAX);
+    const limitRaw = req.query.limit as string | undefined;
+    const offsetRaw = req.query.offset as string | undefined;
+    const status = req.query.status as string | undefined;
+
+    const limit = limitRaw === undefined ? 20 : parseInt(limitRaw, 10);
+    const offset = offsetRaw === undefined ? 0 : parseInt(offsetRaw, 10);
+
+    if (Number.isNaN(limit) || limit < 1 || limit > 100) {
+      return next(new AppError("Invalid limit", HTTP_STATUS.BAD_REQUEST));
+    }
+    if (Number.isNaN(offset) || offset < 0) {
+      return next(new AppError("Invalid offset", HTTP_STATUS.BAD_REQUEST));
+    }
+    if (status !== undefined && status !== "success" && status !== "failed") {
+      return next(new AppError("Invalid status", HTTP_STATUS.BAD_REQUEST));
+    }
 
     const now = Date.now();
-    const raw = (historyStore.get(ip) ?? []).filter((e) => e.expiresAt > now);
-    const entries = raw
-      .map((e) => e.entry)
-      .reverse()
-      .slice(0, limit);
+    let raw = (historyStore.get(ip) ?? []).filter((e) => e.expiresAt > now);
+    let entries = raw.map((e) => e.entry).reverse();
+    if (status === "success") entries = entries.filter((e) => e.success);
+    if (status === "failed") entries = entries.filter((e) => !e.success);
 
-    res.status(HTTP_STATUS.OK).json({
-      ip,
-      total: raw.length,
-      limit,
-      results: entries,
-    });
+    const total = entries.length;
+    const data = entries.slice(offset, offset + limit);
+    const hasMore = offset + limit < total;
+    const page = Math.floor(offset / limit) + 1;
+
+    res.status(HTTP_STATUS.OK).json({ page, limit, total, hasMore, data });
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
@@ -1016,6 +1026,34 @@ export function getSimulateHistory(
   }
 }
 
+export async function rpcGateway(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const { jsonrpc, id, method, params } = req.body ?? {};
+  if (jsonrpc !== "2.0" || id === undefined) {
+    res.status(400).json({ jsonrpc: "2.0", id: id ?? null, error: { code: -32600, message: "Invalid Request" } });
+    return;
+  }
+  try {
+    if (method === "simulateTransaction") {
+      const [xdr, network] = params ?? [];
+      const result = await simulateTransaction(xdr, network || "testnet");
+      res.json({ jsonrpc: "2.0", id, result });
+      return;
+    }
+    if (method === "estimateFee") {
+      res.json({ jsonrpc: "2.0", id, result: {} });
+      return;
+    }
+    if (method === "decodeXdr") {
+      const [xdr, type] = params ?? [];
+      const result = decodeXdr(xdr, (type as any) || "transaction");
+      res.json({ jsonrpc: "2.0", id, result });
+      return;
+    }
+    res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+  } catch (err) {
+    res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32602, message: (err as Error).message } });
+  }
+}
 // ---------------------------------------------------------------------------
 // Issue #24 — Server-Sent Events endpoint for real-time batch simulation status
 // ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@ import crypto from "crypto";
 
 import { Request, Response, NextFunction } from "express";
 
+import { redisClient } from "../services/cache";
+
 /**
  * #342 — HMAC-SHA256 signature verification middleware for inbound webhook routes.
  *
@@ -15,110 +17,24 @@ import { Request, Response, NextFunction } from "express";
 export const WEBHOOK_SIGNATURE_HEADER = "x-webhook-signature";
 
 /**
- * Header used for timestamped HMAC-SHA256 signatures on outgoing webhooks.
- * Format: `t=<unix-seconds>,v1=<hex-hmac-sha256>`.
- */
-export const SIGNATURE_SHA256_HEADER = "x-signature-sha256";
-
-/** Default tolerance (in seconds) for timestamped signature verification. */
-export const DEFAULT_SIGNATURE_TOLERANCE_SECONDS = 300;
-
-export interface VerifyWebhookSignatureOptions {
-  /** Maximum allowed age of the timestamp, in seconds. Defaults to 300. */
-  toleranceSeconds?: number;
-  /** Current time in seconds since epoch. Defaults to `Date.now() / 1000`. */
-  now?: number;
-}
-
-/**
- * Computes the timestamped HMAC-SHA256 signature for a payload.
+ * #86 — Replay attack prevention.
  *
- * The signed message is `${timestamp}.${payload}`, matching the
- * Stripe/GitHub webhook signature convention.
+ * Signed requests must also carry a Unix timestamp (seconds) and a unique
+ * nonce. Timestamps older than `MAX_TIMESTAMP_DRIFT_SECONDS` are rejected, and
+ * nonces are stored in Redis with a TTL so that a replayed request is blocked.
  */
-export function computeWebhookSignature(
-  payload: string | Buffer,
-  secret: string,
-  timestamp: number,
-): string {
-  return crypto
-    .createHmac("sha256", secret)
-    .update(`${timestamp}.`)
-    .update(payload)
-    .digest("hex");
-}
+export const REQUEST_TIMESTAMP_HEADER = "x-request-timestamp";
+export const REQUEST_NONCE_HEADER = "x-request-nonce";
 
-/**
- * Parses a `t=<timestamp>,v1=<signature>` header value.
- * Returns `null` when the header is malformed.
- */
-export function parseSignatureHeader(
-  header: string,
-): { timestamp: number; signature: string } | null {
-  let timestamp: number | undefined;
-  let signature: string | undefined;
+export const MAX_TIMESTAMP_DRIFT_SECONDS = 300;
+export const NONCE_TTL_SECONDS = 600;
+export const NONCE_KEY_PREFIX = "nonce:";
 
-  for (const part of header.split(",")) {
-    const idx = part.indexOf("=");
-    if (idx === -1) continue;
-
-    const key = part.slice(0, idx).trim();
-    const value = part.slice(idx + 1).trim();
-
-    if (key === "t") {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) return null;
-      timestamp = parsed;
-    } else if (key === "v1") {
-      signature = value;
-    }
-  }
-
-  if (timestamp === undefined || !signature) return null;
-
-  return { timestamp, signature };
-}
-
-/**
- * Verifies a timestamped HMAC-SHA256 webhook signature using constant-time
- * comparison.
- *
- * Returns `true` only when the header is well-formed, the timestamp is within
- * the allowed tolerance, and the recomputed signature matches.
- */
-export function verifyWebhookSignature(
-  payload: string | Buffer,
-  header: string | undefined | null,
-  secret: string,
-  options: VerifyWebhookSignatureOptions = {},
-): boolean {
-  if (!header || !secret) return false;
-
-  const parsed = parseSignatureHeader(header);
-  if (!parsed) return false;
-
-  const tolerance =
-    options.toleranceSeconds ?? DEFAULT_SIGNATURE_TOLERANCE_SECONDS;
-  const now = options.now ?? Math.floor(Date.now() / 1000);
-
-  if (Math.abs(now - parsed.timestamp) > tolerance) return false;
-
-  const expected = computeWebhookSignature(payload, secret, parsed.timestamp);
-
-  const sigBuffer = Buffer.from(parsed.signature, "utf8");
-  const expBuffer = Buffer.from(expected, "utf8");
-
-  if (sigBuffer.length !== expBuffer.length) return false;
-
-  return crypto.timingSafeEqual(sigBuffer, expBuffer);
-}
-
-export function hmacVerify(
-=======
+export async function hmacVerify(
   req: Request,
   res: Response,
   next: NextFunction,
-): void {
+): Promise<void> {
   const secret = process.env.WEBHOOK_VERIFY_SECRET;
 
   if (!secret) {
@@ -130,6 +46,35 @@ export function hmacVerify(
 
   if (!signature) {
     res.status(401).json({ error: "Missing webhook signature" });
+    return;
+  }
+
+  const timestampHeader = req.headers[REQUEST_TIMESTAMP_HEADER] as
+    | string
+    | undefined;
+  const nonce = req.headers[REQUEST_NONCE_HEADER] as string | undefined;
+
+  if (!timestampHeader) {
+    res.status(401).json({ error: "Missing request timestamp" });
+    return;
+  }
+
+  if (!nonce) {
+    res.status(401).json({ error: "Missing request nonce" });
+    return;
+  }
+
+  const timestamp = Number(timestampHeader);
+
+  if (!Number.isFinite(timestamp) || !Number.isInteger(timestamp)) {
+    res.status(401).json({ error: "Invalid request timestamp" });
+    return;
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  if (Math.abs(nowSeconds - timestamp) > MAX_TIMESTAMP_DRIFT_SECONDS) {
+    res.status(401).json({ error: "Request timestamp expired" });
     return;
   }
 
@@ -150,6 +95,24 @@ export function hmacVerify(
     !crypto.timingSafeEqual(sigBuffer, expBuffer)
   ) {
     res.status(401).json({ error: "Invalid webhook signature" });
+    return;
+  }
+
+  try {
+    const result = await redisClient.set(
+      `${NONCE_KEY_PREFIX}${nonce}`,
+      "1",
+      "EX",
+      NONCE_TTL_SECONDS,
+      "NX",
+    );
+
+    if (result === null) {
+      res.status(401).json({ error: "Replay detected: nonce already used" });
+      return;
+    }
+  } catch {
+    res.status(503).json({ error: "Unable to verify request nonce" });
     return;
   }
 
