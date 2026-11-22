@@ -79,3 +79,7 @@ PR_SUMMARY.md
 PLAN.md
 GRAFANA_DASHBOARD_COMPLETE.md
 IMPLEMENTATION_INDEX.md
+
+# test snapshots
+**/__snapshots__/
+**/*.snap

@@ -1,6 +1,41 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-export type Network = "mainnet" | "testnet" | "futurenet";
+export function parseRpcHeaders(raw?: string): Record<string, string> {
+  if (!raw) return {};
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed)) out[String(k)] = String(v);
+      return out;
+    }
+  } catch {
+    // fall through to formatted pairs
+  }
+  const out: Record<string, string> = {};
+  for (const pair of trimmed.split(/[,;\n]/)) {
+    const idx = pair.indexOf("=");
+    if (idx > 0) {
+      const key = pair.slice(0, idx).trim();
+      const val = pair.slice(idx + 1).trim();
+      if (key) out[key] = val;
+    } else {
+      const colon = pair.indexOf(":");
+      if (colon > 0) {
+        const key = pair.slice(0, colon).trim();
+        const val = pair.slice(colon + 1).trim();
+        if (key) out[key] = val;
+      }
+    }
+  }
+  return out;
+}
+
+export function getRpcHeaders(): Record<string, string> {
+  return parseRpcHeaders(process.env.STELLAR_RPC_HEADERS);
+}
 
 export function isValidNetwork(value: unknown): value is Network {
   return value === "testnet" || value === "mainnet" || value === "futurenet";
@@ -62,7 +97,8 @@ export function getRpcServer(
 
   const { rpcUrl } = getNetworkConfig(network);
   const allowHttp = process.env.ALLOW_HTTP === "true";
-  const server = new StellarSdk.rpc.Server(rpcUrl, { allowHttp });
+  const headers = getRpcHeaders();
+  const server = new StellarSdk.rpc.Server(rpcUrl, { allowHttp, headers } as never);
   pool.set(network, { server, createdAt: now });
   return server;
 }

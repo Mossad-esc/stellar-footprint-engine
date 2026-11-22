@@ -2,7 +2,45 @@ import { Network, getRpcServer, getNetworkConfig } from "../config/stellar";
 import { CACHE_TTL } from "../constants";
 import { logger } from "../utils/logger";
 
-export interface NetworkStatusResult {
+// ---------------------------------------------------------------------------
+// Issue #70 — Cache getLatestLedger sequence (2s TTL)
+// ---------------------------------------------------------------------------
+interface LedgerCacheEntry {
+  sequence: number;
+  closeTime: number;
+  timestamp: number;
+}
+const ledgerCache = new Map<Network, LedgerCacheEntry>();
+const LEDGER_CACHE_TTL_MS = 2000;
+
+let ledgerCacheHits = 0;
+let ledgerCacheMisses = 0;
+
+export function getLedgerCacheStats(): { hits: number; misses: number } {
+  return { hits: ledgerCacheHits, misses: ledgerCacheMisses };
+}
+
+export async function getLatestLedgerCached(
+  network: Network = "testnet",
+  forceRefresh = false,
+): Promise<{ sequence: number; closeTime: number }> {
+  const now = Date.now();
+  const cached = ledgerCache.get(network);
+  if (!forceRefresh && cached && now - cached.timestamp < LEDGER_CACHE_TTL_MS) {
+    ledgerCacheHits++;
+    return { sequence: cached.sequence, closeTime: cached.closeTime };
+  }
+  ledgerCacheMisses++;
+  const server = getRpcServer(network);
+  const latest = await server.getLatestLedger();
+  const entry: LedgerCacheEntry = {
+    sequence: latest.sequence,
+    closeTime: (latest as { closeTime?: number }).closeTime ?? now,
+    timestamp: now,
+  };
+  ledgerCache.set(network, entry);
+  return { sequence: entry.sequence, closeTime: entry.closeTime };
+}
   ledger: number;
   baseFee: string;
   networkPassphrase: string;
