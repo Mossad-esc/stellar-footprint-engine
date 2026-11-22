@@ -1,4 +1,10 @@
 import * as http from "http";
+import * as StellarSdk from "@stellar/stellar-sdk";
+
+import {
+  getFixtureByContractId,
+  SimulateTransactionFixtureResult,
+} from "../fixtures";
 
 /**
  * Response type for mock RPC server
@@ -13,6 +19,8 @@ export interface MockRpcConfig {
   simulationError?: string;
   transactionData?: string;
   ledgerSequence?: number;
+  useTokenFixtures?: boolean;
+  contractFixtures?: Record<string, Partial<SimulateTransactionFixtureResult>>;
 }
 
 /**
@@ -87,7 +95,14 @@ export async function startMockRpcServer(): Promise<MockRpcServerInstance> {
 
         // Route to appropriate handler
         if (method === "simulateTransaction") {
-          handleSimulateTransaction(res, config);
+          const txXdr =
+            typeof jsonBody.params?.transaction === "string"
+              ? jsonBody.params.transaction
+              : Array.isArray(jsonBody.params) &&
+                  typeof jsonBody.params[0] === "string"
+                ? jsonBody.params[0]
+                : undefined;
+          handleSimulateTransaction(res, config, txXdr);
         } else if (method === "getLatestLedger") {
           handleGetLatestLedger(res, config);
         } else if (method === "getLedgerEntries") {
@@ -139,11 +154,65 @@ export async function startMockRpcServer(): Promise<MockRpcServerInstance> {
 }
 
 /**
+ * Extract the invoked contract ID and function name from a base64 transaction envelope XDR.
+ */
+function extractInvokedContract(
+  txXdr?: string,
+): { contractId: string; functionName?: string } | undefined {
+  if (!txXdr) return undefined;
+
+  try {
+    const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(
+      txXdr,
+      "base64",
+    );
+    let operations: StellarSdk.xdr.Operation[] = [];
+    const envType = envelope.switch();
+
+    if (envType === StellarSdk.xdr.EnvelopeType.envelopeTypeTx()) {
+      operations = envelope.v1().tx().operations();
+    } else if (envType === StellarSdk.xdr.EnvelopeType.envelopeTypeTxV0()) {
+      operations = envelope.v0().tx().operations();
+    } else if (
+      envType === StellarSdk.xdr.EnvelopeType.envelopeTypeTxFeeBump()
+    ) {
+      operations = envelope.feeBump().tx().innerTx().v1().tx().operations();
+    }
+
+    for (const op of operations) {
+      const body = op.body();
+      if (
+        body.switch() === StellarSdk.xdr.OperationType.invokeHostFunction()
+      ) {
+        const hostFn = body.invokeHostFunctionOp().hostFunction();
+        if (
+          hostFn.switch() ===
+          StellarSdk.xdr.HostFunctionType.hostFunctionTypeInvokeContract()
+        ) {
+          const args = hostFn.invokeContract();
+          return {
+            contractId: StellarSdk.Address.fromScAddress(
+              args.contractAddress(),
+            ).toString(),
+            functionName: args.functionName().toString("utf8"),
+          };
+        }
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+/**
  * Handle simulateTransaction RPC method
  */
 function handleSimulateTransaction(
   res: http.ServerResponse,
   config: MockRpcConfig,
+  txXdr?: string,
 ): void {
   res.writeHead(200, { "Content-Type": "application/json" });
 
@@ -171,18 +240,35 @@ function handleSimulateTransaction(
       }),
     );
   } else {
+    const invoked = extractInvokedContract(txXdr);
+    const customFixture =
+      invoked && config.contractFixtures?.[invoked.contractId];
+    const tokenFixture =
+      invoked &&
+      config.useTokenFixtures !== false &&
+      !config.transactionData
+        ? getFixtureByContractId(invoked.contractId, invoked.functionName)
+            ?.simulateTransaction
+        : undefined;
+    const matched = customFixture || tokenFixture;
+
     // success response
     res.end(
       JSON.stringify({
         jsonrpc: "2.0",
         result: {
           transactionData:
-            config.transactionData || DEFAULT_RESPONSES.success.transactionData,
-          minResourceFee: DEFAULT_RESPONSES.success.minResourceFee,
-          cost: DEFAULT_RESPONSES.success.cost,
-          events: DEFAULT_RESPONSES.success.events,
+            config.transactionData ||
+            matched?.transactionData ||
+            DEFAULT_RESPONSES.success.transactionData,
+          minResourceFee:
+            matched?.minResourceFee || DEFAULT_RESPONSES.success.minResourceFee,
+          cost: matched?.cost || DEFAULT_RESPONSES.success.cost,
+          events: matched?.events || DEFAULT_RESPONSES.success.events,
           latestLedger:
-            config.ledgerSequence || DEFAULT_RESPONSES.success.latestLedger,
+            config.ledgerSequence ||
+            matched?.latestLedger ||
+            DEFAULT_RESPONSES.success.latestLedger,
         },
         id: 1,
       }),

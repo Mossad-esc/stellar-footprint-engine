@@ -17,6 +17,25 @@ services:
       timeout: 3s
       retries: 5
 
+  stellar-quickstart:
+    image: stellar/quickstart:soroban-dev
+    command: --standalone --enable-soroban-rpc
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - test_net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getHealth\"}' http://localhost:8000/soroban/rpc | grep -q '\"status\":\"healthy\"'",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+
 networks:
   test_net:
     driver: bridge

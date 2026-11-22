@@ -1,5 +1,6 @@
 import { Network, getRpcServer, getNetworkConfig } from "../config/stellar";
 import { CACHE_TTL } from "../constants";
+import { logger } from "../utils/logger";
 
 export interface NetworkStatusResult {
   ledger: number;
@@ -47,5 +48,42 @@ export async function getNetworkStatus(
   };
 
   cache.set(network, { data: result, timestamp: now });
+
+  // Notify any registered broadcast listeners (e.g. WebSocket gateway).
+  emitLedgerClose(network, result);
+
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #25 — Ledger-close event broadcasting for WebSocket subscribers
+// ---------------------------------------------------------------------------
+
+type LedgerCloseListener = (
+  network: Network,
+  status: NetworkStatusResult,
+) => void;
+
+const ledgerCloseListeners = new Set<LedgerCloseListener>();
+
+/**
+ * Register a callback that will be invoked whenever a fresh ledger-close
+ * status is fetched from an RPC server.
+ */
+export function onLedgerClose(listener: LedgerCloseListener): () => void {
+  ledgerCloseListeners.add(listener);
+  return () => ledgerCloseListeners.delete(listener);
+}
+
+function emitLedgerClose(network: Network, status: NetworkStatusResult): void {
+  for (const listener of ledgerCloseListeners) {
+    try {
+      listener(network, status);
+    } catch (err) {
+      logger.warn(
+        { err },
+        "networkStatus: uncaught error in ledgerClose listener",
+      );
+    }
+  }
 }

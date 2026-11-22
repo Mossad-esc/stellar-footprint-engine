@@ -1,0 +1,18 @@
+{
+  "name": "sac-xlm-transfer",
+  "protocol": "Stellar Asset Contract (SAC)",
+  "operation": "transfer",
+  "contractId": "CAFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUTSM",
+  "functionName": "transfer",
+  "network": "testnet",
+  "simulateTransaction": {
+    "transactionData": "AAAAAAAAAAEAAAAGAAAAAQoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKAAAAFAAAAAEAAAABAAAABgAAAAEKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgAAAA8AAAAHQmFsYW5jZQAAAAABAAO9gAAABQAAAAFAAAAAAAAAN6o=",
+    "minResourceFee": "14250",
+    "cost": {
+      "cpuInsns": "245120",
+      "memBytes": "1280"
+    },
+    "events": [],
+    "latestLedger": 1245800
+  }
+}

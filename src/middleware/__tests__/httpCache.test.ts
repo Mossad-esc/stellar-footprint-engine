@@ -1,11 +1,12 @@
 /**
  * #341 — ETag / Cache-Control / 304 caching headers tests
+ * #39  — staticCacheMiddleware tests
  */
 import crypto from "crypto";
 
 import { Request, Response, NextFunction } from "express";
 
-import { httpCacheMiddleware } from "../httpCache";
+import { httpCacheMiddleware, staticCacheMiddleware } from "../httpCache";
 
 function makeReqRes(ifNoneMatch?: string) {
   const headers: Record<string, string | undefined> = {
@@ -84,6 +85,54 @@ describe("httpCacheMiddleware (#341)", () => {
     res.statusCode = 400;
     httpCacheMiddleware(req, res, next);
     res.json({ error: "bad request" });
+
+    expect(resHeaders["cache-control"]).toBeUndefined();
+    expect(resHeaders["etag"]).toBeUndefined();
+  });
+});
+
+describe("staticCacheMiddleware (#39)", () => {
+  it("sets ETag and Cache-Control: public, max-age=3600 on 200 responses", () => {
+    const { req, res, resHeaders } = makeReqRes();
+    const next: NextFunction = jest.fn();
+
+    staticCacheMiddleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+
+    const body = { networks: ["testnet", "mainnet"] };
+    res.json(body);
+
+    const payload = JSON.stringify(body);
+    const expectedEtag = `"${crypto.createHash("sha256").update(payload).digest("hex")}"`;
+
+    expect(resHeaders["etag"]).toBe(expectedEtag);
+    expect(resHeaders["cache-control"]).toBe("public, max-age=3600");
+  });
+
+  it("returns 304 when If-None-Match matches ETag", () => {
+    const body = { networks: ["testnet"] };
+    const payload = JSON.stringify(body);
+    const etag = `"${crypto.createHash("sha256").update(payload).digest("hex")}"`;
+
+    const { req, res } = makeReqRes(etag);
+    const originalJsonMock = res.json;
+    const next: NextFunction = jest.fn();
+
+    staticCacheMiddleware(req, res, next);
+    res.json(body);
+
+    expect(res.status).toHaveBeenCalledWith(304);
+    expect(res.end).toHaveBeenCalled();
+    expect(originalJsonMock).not.toHaveBeenCalled();
+  });
+
+  it("does not set cache headers on non-200 responses", () => {
+    const { req, res, resHeaders } = makeReqRes();
+    const next: NextFunction = jest.fn();
+
+    res.statusCode = 500;
+    staticCacheMiddleware(req, res, next);
+    res.json({ error: "server error" });
 
     expect(resHeaders["cache-control"]).toBeUndefined();
     expect(resHeaders["etag"]).toBeUndefined();

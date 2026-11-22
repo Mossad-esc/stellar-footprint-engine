@@ -1,11 +1,23 @@
 import { Router } from "express";
 
+import { staticCacheMiddleware } from "../middleware/httpCache";
+import {
+  simulateRateLimiter,
+  decodeRateLimiter,
+  feeRateLimiter,
+} from "../middleware/rateLimiter";
+import {
+  simulateRateLimiter,
+  decodeRateLimiter,
+  feeRateLimiter,
+} from "../middleware/rateLimiter";
 import {
   health,
   liveness,
   readiness,
   simulate,
   simulateBatch,
+  simulateBatchStream,
   getSimulationJob,
   footprintDiffController,
   validate,
@@ -13,6 +25,7 @@ import {
   decode,
   restore,
   invalidateCache,
+  invalidateContractCacheController,
   estimateFeeController,
   costBreakdownController,
   openApiSpec,
@@ -20,12 +33,8 @@ import {
   simulateDryRun,
   getSimulateHistory,
   rpcGateway,
+  rpcStatus,
 } from "./controllers";
-import {
-  simulateRateLimiter,
-  decodeRateLimiter,
-  feeRateLimiter,
-} from "../middleware/rateLimiter";
 
 const router = Router();
 
@@ -39,7 +48,11 @@ router.get("/health/live", liveness);
 router.get("/health/ready", readiness);
 
 // GET /simulate/supported-networks — returns list of networks with configured RPC URLs
-router.get("/simulate/supported-networks", supportedNetworks);
+router.get(
+  "/simulate/supported-networks",
+  staticCacheMiddleware,
+  supportedNetworks,
+);
 
 // POST /simulate — accepts { xdr, network } and returns footprint + cost
 router.post("/simulate", simulateRateLimiter, simulate);
@@ -56,11 +69,17 @@ router.get("/simulate/jobs/:jobId", getSimulationJob);
 // POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
 router.post("/simulate/batch", simulateBatch);
 
+// GET /simulate/batch/stream — SSE endpoint for real-time batch simulation status
+router.get("/simulate/batch/stream", simulateBatchStream);
+
 // GET /simulate/cost-breakdown — accepts ?cpuInsns=&memBytes=&network= and returns detailed cost breakdown
 router.get("/simulate/cost-breakdown", costBreakdownController);
 
 // GET /network/status — returns current network information
 router.get("/network/status", networkStatus);
+
+// GET /rpc/status — returns live RPC pool stats and circuit breaker state (#40)
+router.get("/rpc/status", rpcStatus);
 
 // POST /footprint/diff — compares two footprints and returns differences
 router.post("/footprint/diff", footprintDiffController);
@@ -82,8 +101,10 @@ router.delete("/cache", invalidateCache);
 
 // POST /rpc — JSON-RPC 2.0 gateway
 router.post("/rpc", rpcGateway);
+// DELETE /cache/contract/:contractId — invalidate cache entries for a specific contract
+router.delete("/cache/contract/:contractId", invalidateContractCacheController);
 
 // GET /openapi.json — serve raw OpenAPI spec as JSON
-router.get("/openapi.json", openApiSpec);
+router.get("/openapi.json", staticCacheMiddleware, openApiSpec);
 
 export default router;

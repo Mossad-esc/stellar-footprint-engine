@@ -12,7 +12,9 @@ info:
 
 servers:
   - url: /api/v1
-    description: Current API version
+    description: Current API version (same-origin)
+  - url: http://localhost:3000/api/v1
+    description: Local Development Server (Testnet)
 
 tags:
   - name: simulation
@@ -155,7 +157,7 @@ paths:
             schema:
               $ref: "#/components/schemas/SimulateRequest"
             example:
-              xdr: "AAAAAgAAAAC..."
+              xdr: "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg=="
               network: testnet
       responses:
         "200":
@@ -239,7 +241,7 @@ paths:
             schema:
               $ref: "#/components/schemas/ValidateRequest"
             example:
-              xdr: "AAAAAgAAAAC..."
+              xdr: "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg=="
               network: testnet
       responses:
         "200":
@@ -340,8 +342,8 @@ paths:
               $ref: "#/components/schemas/SimulateBatchRequest"
             example:
               transactions:
-                - xdr: "AAAAAgAAAAC..."
-                - xdr: "AAAAAgAAAAD..."
+                - xdr: "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg=="
+                - xdr: "AAAAAJ0NBMo4F1o4fTKd/qTtKmTK1qGVSM2xaCbhYQHyuYTVAAAAZAAAAAAAAAAoAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAAAAA=="
               network: testnet
       responses:
         "200":
@@ -512,7 +514,7 @@ paths:
             schema:
               $ref: "#/components/schemas/ValidateRequest"
             example:
-              xdr: "AAAAAgAAAAC..."
+              xdr: "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg=="
               network: testnet
       responses:
         "200":
@@ -550,7 +552,7 @@ paths:
           description: Base64-encoded XDR string to decode
           schema:
             type: string
-            example: "AAAAAgAAAAC..."
+            example: "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg=="
         - name: type
           in: query
           required: false
@@ -595,7 +597,7 @@ paths:
             schema:
               $ref: "#/components/schemas/RestoreRequest"
             example:
-              xdr: "AAAAAgAAAAC..."
+              xdr: "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg=="
               network: testnet
       responses:
         "200":

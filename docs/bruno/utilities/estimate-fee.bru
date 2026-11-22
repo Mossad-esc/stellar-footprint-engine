@@ -1,0 +1,26 @@
+meta {
+  name: Estimate Fee
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/estimate-fee
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "cpuInsns": "100000",
+    "memBytes": "1024",
+    "network": "{{network}}"
+  }
+}
+
+tests {
+  test("should return 200 OK with fee estimate", function () {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().totalFee).to.be.a("string");
+  });
+}

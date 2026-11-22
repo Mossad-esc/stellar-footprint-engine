@@ -12,6 +12,7 @@ Step-by-step deployment instructions for **Stellar Footprint Service** across co
 - [Fly.io](#3-flyio)
 - [Bare VPS with PM2](#4-bare-vps-with-pm2)
 - [Kubernetes](#5-kubernetes)
+- [Production Docker Compose with Nginx & TLS](#6-production-docker-compose-with-nginx--tls)
 
 ---
 
@@ -464,3 +465,45 @@ A `200` from `/health` and a `400` (missing XDR) or `422` from `/api/v1/simulate
 For deploying to a Kubernetes cluster using the manifests in `k8s/`, see the full [Kubernetes Deployment Guide](./guides/kubernetes.md).
 
 It covers prerequisites, applying manifests, configuring secrets, HPA tuning, and health check configuration.
+
+---
+
+## 6. Production Docker Compose with Nginx & TLS
+
+Deploy the full production stack (`stellar-footprint-service` replicas, `redis`, `nginx`, `certbot`, `prometheus`, and `grafana`) using [docker-compose.prod.yml](../docker-compose.prod.yml) and [nginx/nginx.conf](../nginx/nginx.conf).
+
+### Features
+
+- **Edge Reverse Proxy & Load Balancing**: Nginx distributes requests across `stellar-footprint-service` replicas using `least_conn` and HTTP/1.1 keepalive connections.
+- **Modern TLS & Security Headers**: Enforces TLSv1.2/TLSv1.3, modern AEAD ciphers, HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy`.
+- **Edge Rate Limiting**: Limits `/api/v1/simulate` to `10r/s` (burst 10) and general API routes to `30r/s` (burst 30), returning JSON `429` responses.
+- **Request Buffering & Static Caching**: Configures proxy buffers (`proxy_buffering on`) and 7-day `Cache-Control` headers for static assets.
+- **Automated Let's Encrypt Certificates**: Certbot renews certificates every 12 hours while Nginx reloads every 6 hours to pick up updated certificates.
+
+### Setup Steps
+
+1. **Update your domain in `nginx/nginx.conf`**:
+   Replace `example.com` in `ssl_certificate` and `ssl_certificate_key` paths with your domain name.
+
+2. **Issue the initial Let's Encrypt certificate**:
+   Start Nginx temporarily or run Certbot in standalone/webroot mode:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml run --rm --entrypoint "\
+     certbot certonly --webroot -w /var/www/certbot \
+     --email you@example.com --agree-tos --no-eff-email \
+     -d api.example.com" certbot
+   ```
+
+3. **Start the production stack**:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml up -d --build
+   ```
+
+4. **Verify health and TLS**:
+
+   ```bash
+   curl https://api.example.com/health/live
+   curl https://api.example.com/health/ready
+   ```
