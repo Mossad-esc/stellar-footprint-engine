@@ -3,6 +3,11 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+// Initialize OpenTelemetry before Express and other instrumented modules load
+// eslint-disable-next-line import-x/order
+import { initTracing, shutdownTracing } from "./tracing";
+initTracing();
+
 const _startupBegin = process.hrtime.bigint();
 
 import path from "path";
@@ -16,6 +21,7 @@ import routes from "./api/routes";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { bruteForceMiddleware } from "./middleware/bruteForce";
 import { contentTypeMiddleware } from "./middleware/contentType";
+import { closeCounterStore } from "./middleware/counterStore";
 import { errorHandler } from "./middleware/errorHandler";
 import { httpCacheMiddleware } from "./middleware/httpCache";
 import { ipFilterMiddleware } from "./middleware/ipFilter";
@@ -24,6 +30,7 @@ import { requestIdMiddleware } from "./middleware/requestId";
 import { requestLogger } from "./middleware/requestLogger";
 import { responseTimeMiddleware } from "./middleware/responseTime";
 import { timeoutMiddleware } from "./middleware/timeout";
+import { closeCache } from "./services/cache";
 import { logger } from "./utils/logger";
 
 const app = express();
@@ -99,25 +106,67 @@ app.use(bruteForceMiddleware);
 app.use(contentTypeMiddleware);
 app.use(httpCacheMiddleware);
 
-// Swagger UI — development only
+// Interactive API Playground (Scalar UI) & Swagger UI — development only
 if (process.env.NODE_ENV !== "production") {
-  const swaggerUi =
-    require("swagger-ui-express") as typeof import("swagger-ui-express");
-
   const YAML = require("yaml") as { parse: (s: string) => unknown };
-
   const fs = require("fs") as typeof import("fs");
   const specPath = path.join(__dirname, "..", "openapi.yaml");
+
   if (fs.existsSync(specPath)) {
     const spec = YAML.parse(fs.readFileSync(specPath, "utf8")) as Record<
       string,
       unknown
     >;
-    const swaggerSetup = swaggerUi.setup(spec, {
-      customSiteTitle: "Stellar Footprint Service API",
+
+    const { apiReference } =
+      require("@scalar/express-api-reference") as typeof import("@scalar/express-api-reference");
+
+    // Relax CSP for the interactive API playground so Scalar assets and Testnet
+    // "Try It" requests work in non-production environments.
+    const docsCspMiddleware: express.RequestHandler = (_req, res, next) => {
+      res.setHeader(
+        "Content-Security-Policy",
+        [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+          "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
+          "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+          "img-src 'self' data: https:",
+          "connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://soroban-rpc.mainnet.stellar.gateway.fm",
+        ].join("; "),
+      );
+      next();
+    };
+
+    const scalarHandler = apiReference({
+      spec: { content: spec },
+      theme: "purple",
+      layout: "modern",
+      showSidebar: true,
+      defaultHttpClient: {
+        targetKey: "js",
+        clientKey: "fetch",
+      },
+      hiddenClients: [],
+      authentication: {
+        preferredSecurityScheme: "ApiKeyHeader",
+        apiKey: {
+          token: process.env.API_KEY || "testnet-demo-key",
+        },
+      },
+      metaData: {
+        title: "Stellar Footprint Service — Interactive API Playground",
+      },
+      customCss: `
+        @media (max-width: 768px) {
+          .scalar-api-reference { font-size: 14px; }
+          .scalar-card, pre, code { max-width: 100%; overflow-x: auto; }
+        }
+      `,
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (app as any).use("/api/docs", swaggerUi.serve, swaggerSetup);
+
+    app.use("/api/docs", docsCspMiddleware, scalarHandler);
+    app.use("/api/reference", docsCspMiddleware, scalarHandler);
   }
 }
 
@@ -164,21 +213,42 @@ if (require.main === module) {
       },
       "stellar-footprint-service started",
     );
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
   });
 
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.headersTimeout = HEADERS_TIMEOUT_MS;
 
+  let isShuttingDown = false;
+
   const shutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     logger.info(`${signal} received, shutting down gracefully`);
-    server.close(() => {
-      logger.info("Server closed, exiting");
-      process.exit(0);
-    });
-    setTimeout(() => {
-      logger.warn("Forced exit after timeout");
+
+    const forceExitTimer = setTimeout(() => {
+      logger.warn("Forced exit after 10s shutdown timeout");
       process.exit(1);
-    }, 10_000).unref();
+    }, 10_000);
+    forceExitTimer.unref();
+
+    server.close(async (err) => {
+      clearTimeout(forceExitTimer);
+      if (err) {
+        logger.error({ err }, "Error closing HTTP server");
+      }
+
+      try {
+        await Promise.allSettled([closeCache(), closeCounterStore()]);
+        logger.info("Redis connections closed, exiting");
+      } catch (cleanupErr) {
+        logger.error({ err: cleanupErr }, "Error during shutdown cleanup");
+      }
+
+      process.exit(err ? 1 : 0);
+    });
   };
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));

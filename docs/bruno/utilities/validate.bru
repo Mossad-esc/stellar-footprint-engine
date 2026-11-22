@@ -1,0 +1,24 @@
+meta {
+  name: Validate XDR
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{baseUrl}}/validate
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "xdr": "{{sampleTxXdr}}",
+    "network": "{{network}}"
+  }
+}
+
+tests {
+  test("should return 200 OK", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

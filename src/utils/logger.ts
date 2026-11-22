@@ -1,44 +1,36 @@
 import pino from "pino";
 
 const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
+const isProduction = process.env.NODE_ENV === "production";
 
-const STELLAR_SECRET_KEY_REGEX = /S[A-Z0-9]{55}/g;
+/**
+ * Standard metadata injected into every log record.
+ *
+ * In production these fields satisfy ECS (Elastic Common Schema) and
+ * Datadog log pipeline requirements:
+ *   - service / version / env  → unified service tagging
+ *   - commit                   → correlate logs to a specific build
+ *
+ * Timestamps are always emitted as ISO 8601 UTC (e.g. 2026-11-21T14:30:00.000Z)
+ * via pino.stdTimeFunctions.isoTime so both ECS and Datadog ingest them without
+ * a custom date parser.
+ *
+ * In development the logger pretty-prints to stdout so the terminal remains
+ * human-readable.  In production it emits strict single-line JSON — one log
+ * event per line — which is what CloudWatch and Datadog log agents expect.
+ */
 
-export function scrubStellarSecretKeys(obj: unknown): unknown {
-  if (typeof obj === "string") {
-    return obj.replace(STELLAR_SECRET_KEY_REGEX, "[REDACTED]");
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(scrubStellarSecretKeys);
-  }
-  if (obj && typeof obj === "object" && obj !== null) {
-    if (
-      obj instanceof Date ||
-      obj instanceof RegExp ||
-      obj instanceof Error ||
-      Buffer.isBuffer(obj)
-    ) {
-      if (obj instanceof Error) {
-        const scrubbedErr = Object.create(Object.getPrototypeOf(obj));
-        Object.assign(scrubbedErr, obj);
-        if (obj.message) scrubbedErr.message = scrubStellarSecretKeys(obj.message);
-        if (obj.stack) scrubbedErr.stack = scrubStellarSecretKeys(obj.stack);
-        return scrubbedErr;
-      }
-      return obj;
-    }
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj)) {
-      result[key] = scrubStellarSecretKeys(value);
-    }
-    return result;
-  }
-  return obj;
-}
+const baseFields = {
+  service: "stellar-footprint-service",
+  version: process.env.npm_package_version ?? "unknown",
+  env: process.env.NODE_ENV ?? "development",
+  commit: process.env.GIT_COMMIT ?? "unknown",
+};
 
-export const logger = pino({
+const productionOptions: pino.LoggerOptions = {
   level: LOG_LEVEL,
   timestamp: pino.stdTimeFunctions.isoTime,
+  base: baseFields,
   formatters: {
     level(label) {
       return { level: label };
@@ -67,4 +59,20 @@ export const logger = pino({
       return method.apply(this, scrubbedArgs as [any, ...any[]]);
     },
   },
-});
+};
+
+const developmentOptions: pino.LoggerOptions = {
+  ...productionOptions,
+  transport: {
+    target: "pino-pretty",
+    options: {
+      colorize: true,
+      translateTime: "SYS:standard",
+      ignore: "pid,hostname,service,version,env,commit",
+    },
+  },
+};
+
+export const logger = isProduction
+  ? pino(productionOptions)
+  : pino(developmentOptions);

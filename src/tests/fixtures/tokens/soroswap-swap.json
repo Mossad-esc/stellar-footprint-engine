@@ -1,0 +1,18 @@
+{
+  "name": "soroswap-swap",
+  "protocol": "Soroswap AMM",
+  "operation": "swap_exact_tokens_for_tokens",
+  "contractId": "CAPB4HQ6DYPB4HQ6DYPB4HQ6DYPB4HQ6DYPB4HQ6DYPB4HQ6DYPB4QTN",
+  "functionName": "swap_exact_tokens_for_tokens",
+  "network": "testnet",
+  "simulateTransaction": {
+    "transactionData": "AAAAAAAAAAEAAAAGAAAAAR4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eAAAAFAAAAAEAAAABAAAABgAAAAEeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgAAAA8AAAAIUmVzZXJ2ZXMAAAABABwdqAAAIOQAAAhmAAAAAAABePQ=",
+    "minResourceFee": "96500",
+    "cost": {
+      "cpuInsns": "1842600",
+      "memBytes": "8420"
+    },
+    "events": [],
+    "latestLedger": 1245815
+  }
+}
