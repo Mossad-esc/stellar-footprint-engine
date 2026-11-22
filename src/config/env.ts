@@ -43,9 +43,98 @@ export const EnvSchema = z.object({
   FEE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   BATCH_CONCURRENCY: z.coerce.number().int().positive().default(5),
   BATCH_MAX_SIZE: z.coerce.number().int().positive().default(10),
+  CORS_ALLOWED_ORIGINS: z.string().default(""),
+  CORS_ORIGIN: z.string().default(""),
+  CORS_ALLOW_CREDENTIALS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 });
 
 export type EnvConfig = z.infer<typeof EnvSchema>;
+
+export interface ParsedCorsOrigins {
+  /** Exact origins, e.g. "https://app.example.com" */
+  exactOrigins: string[];
+  /** Compiled regexes for wildcard-subdomain patterns, e.g. https://*.stellar.org */
+  patterns: RegExp[];
+  /** Whether credentials (cookies / authorization headers) are allowed */
+  allowCredentials: boolean;
+}
+
+/**
+ * Escape a string for safe inclusion in a RegExp.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Compile a wildcard-subdomain pattern (e.g. "https://*.stellar.org") into a
+ * strict regex that only matches a single valid hostname label in place of the
+ * wildcard. The wildcard never matches empty labels, dots, slashes or ports.
+ */
+export function compileOriginPattern(pattern: string): RegExp {
+  const wildcardToken = "\u0000WILDCARD\u0000";
+  const withToken = pattern.replace("*", wildcardToken);
+  const escaped = escapeRegExp(withToken).replace(
+    escapeRegExp(wildcardToken),
+    "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?",
+  );
+  return new RegExp(`^${escaped}$`, "i");
+}
+
+/**
+ * Parse the CORS_ALLOWED_ORIGINS (or legacy CORS_ORIGIN) env value into exact
+ * origins and compiled wildcard-subdomain regex patterns.
+ */
+export function parseCorsOrigins(
+  rawOrigins: string,
+  allowCredentials: boolean,
+): ParsedCorsOrigins {
+  const entries = rawOrigins
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  const exactOrigins: string[] = [];
+  const patterns: RegExp[] = [];
+
+  for (const entry of entries) {
+    if (entry === "*") {
+      if (allowCredentials) {
+        logger.warn(
+          "CORS: wildcard '*' origin is not allowed when credentials are enabled; ignoring entry",
+        );
+        continue;
+      }
+      // Wildcard without credentials: allow any origin via a permissive pattern.
+      exactOrigins.push("*");
+      continue;
+    }
+
+    if (entry.includes("*")) {
+      patterns.push(compileOriginPattern(entry));
+      continue;
+    }
+
+    exactOrigins.push(entry.replace(/\/+$/, ""));
+  }
+
+  return { exactOrigins, patterns, allowCredentials };
+}
+
+/**
+ * Resolve the effective CORS configuration from a validated env config.
+ * Falls back to the legacy CORS_ORIGIN variable when CORS_ALLOWED_ORIGINS is unset.
+ */
+export function getCorsConfig(config: EnvConfig): ParsedCorsOrigins {
+  const rawOrigins =
+    config.CORS_ALLOWED_ORIGINS.trim().length > 0
+      ? config.CORS_ALLOWED_ORIGINS
+      : config.CORS_ORIGIN;
+  return parseCorsOrigins(rawOrigins, config.CORS_ALLOW_CREDENTIALS);
+}
 
 export function validateEnv(raw: NodeJS.ProcessEnv): EnvConfig {
   const result = EnvSchema.safeParse(raw);

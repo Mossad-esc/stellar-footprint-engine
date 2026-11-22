@@ -16,6 +16,24 @@ interface AppErrorLike extends Error {
   code?: ErrorCode;
 }
 
+interface BodyParserError extends Error {
+  type?: string;
+  status?: number;
+  statusCode?: number;
+}
+
+const PAYLOAD_TOO_LARGE_MESSAGE = "Payload Too Large";
+
+function isPayloadTooLargeError(err: unknown): err is BodyParserError {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as BodyParserError;
+  return (
+    e.type === "entity.too.large" ||
+    e.status === 413 ||
+    e.statusCode === 413
+  );
+}
+
 function isCircuitOpenError(err: unknown): err is CircuitOpenError {
   return (
     typeof err === "object" &&
@@ -76,6 +94,32 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   const t = getTranslations(req.headers["accept-language"]);
+
+  if (isPayloadTooLargeError(err)) {
+    const code = ErrorCode.PAYLOAD_TOO_LARGE ?? ErrorCode.FORBIDDEN;
+
+    if (acceptsProblemJson(req)) {
+      res.set("Content-Type", "application/problem+json");
+      res.status(413).json({
+        type: `https://docs.stellarfootprint.org/errors/${code}`,
+        title: titleForCode(code),
+        status: 413,
+        detail: PAYLOAD_TOO_LARGE_MESSAGE,
+        instance: req.path ?? req.url ?? "/",
+      } satisfies ProblemDetails);
+      return;
+    }
+
+    res.status(413).json({
+      success: false,
+      error: PAYLOAD_TOO_LARGE_MESSAGE,
+      code,
+      ...(res.locals.requestId
+        ? { requestId: res.locals.requestId as string }
+        : {}),
+    } satisfies ResponseEnvelope & { requestId?: string });
+    return;
+  }
 
   if (isCircuitOpenError(err)) {
     res.set("Retry-After", String(err.retryAfter));

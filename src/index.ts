@@ -19,6 +19,7 @@ import helmet from "helmet";
 
 import routes from "./api/routes";
 import { attachWsGateway } from "./api/wsGateway";
+import { env } from "./config/env";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { bruteForceMiddleware } from "./middleware/bruteForce";
 import { contentTypeMiddleware } from "./middleware/contentType";
@@ -41,16 +42,106 @@ const COMPRESSION_THRESHOLD = parseInt(
   10,
 );
 
-function buildCorsOptions(): cors.CorsOptions {
-  const origin = process.env.CORS_ORIGIN;
-  if (!origin) {
-    return process.env.NODE_ENV === "production"
-      ? { origin: false }
-      : { origin: "*" };
-  }
-  const allowed = origin.split(",").map((o) => o.trim());
-  return { origin: allowed.length === 1 ? allowed[0] : allowed };
+const CORS_MAX_AGE_SECONDS = 86400;
+
+/**
+ * Convert an approved wildcard pattern (e.g. `*.stellar.org`) into an exact
+ * host regex. Only a single leading `*.` label is supported so that patterns
+ * cannot be abused to match arbitrary hosts (e.g. `*.stellar.org.evil.com`).
+ */
+function wildcardToRegex(pattern: string): RegExp | null {
+  const trimmed = pattern.trim().toLowerCase();
+  if (!trimmed.startsWith("*.")) return null;
+  const suffix = trimmed.slice(2);
+  if (!suffix || suffix.includes("*")) return null;
+  const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match `https://<subdomain>.<suffix>` with an optional port and no path.
+  return new RegExp(`^https?:\\/\\/([a-z0-9-]+\\.)+${escaped}(:\\d+)?$`, "i");
 }
+
+function buildCorsOptions(): cors.CorsOptions {
+  const allowedOrigins = env.CORS_ALLOWED_ORIGINS;
+  const allowCredentials = env.CORS_ALLOW_CREDENTIALS;
+  const allowAuthorizationHeader = env.CORS_ALLOW_AUTHORIZATION_HEADER;
+
+  const exactOrigins = new Set<string>();
+  const wildcardPatterns: RegExp[] = [];
+
+  for (const entry of allowedOrigins) {
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized) continue;
+    if (normalized === "*") {
+      // Wildcard `*` is unsafe when credentials or authorization headers are
+      // permitted; ignore it in that case rather than silently allowing all.
+      if (allowCredentials || allowAuthorizationHeader) continue;
+      exactOrigins.add("*");
+      continue;
+    }
+    const regex = wildcardToRegex(normalized);
+    if (regex) {
+      wildcardPatterns.push(regex);
+    } else {
+      exactOrigins.add(normalized.replace(/\/$/, ""));
+    }
+  }
+
+  const allowAll = exactOrigins.has("*");
+
+  const originValidator: cors.CorsOptions["origin"] = (
+    requestOrigin,
+    callback,
+  ) => {
+    // Requests without an Origin header (same-origin, curl, server-to-server)
+    // are not subject to CORS and are allowed through.
+    if (!requestOrigin) {
+      callback(null, true);
+      return;
+    }
+
+    if (allowAll) {
+      callback(null, true);
+      return;
+    }
+
+    const normalized = requestOrigin.trim().toLowerCase().replace(/\/$/, "");
+
+    if (exactOrigins.has(normalized)) {
+      callback(null, true);
+      return;
+    }
+
+    if (wildcardPatterns.some((regex) => regex.test(normalized))) {
+      callback(null, true);
+      return;
+    }
+
+    callback(null, false);
+  };
+
+  return {
+    origin: originValidator,
+    credentials: allowCredentials,
+    maxAge: CORS_MAX_AGE_SECONDS,
+    allowedHeaders: allowAuthorizationHeader
+      ? ["Content-Type", "Authorization", "X-API-Key", "X-Request-Id"]
+      : ["Content-Type", "X-API-Key", "X-Request-Id"],
+    optionsSuccessStatus: 204,
+  };
+}
+
+// Ensure caches key on Origin so responses are not shared across origins.
+app.use((req, res, next) => {
+  const existing = res.getHeader("Vary");
+  const varyValues = new Set(
+    (Array.isArray(existing) ? existing : existing ? [String(existing)] : [])
+      .flatMap((v) => String(v).split(","))
+      .map((v) => v.trim())
+      .filter(Boolean),
+  );
+  varyValues.add("Origin");
+  res.setHeader("Vary", Array.from(varyValues).join(", "));
+  next();
+});
 
 app.use(cors(buildCorsOptions()));
 app.use(
@@ -96,7 +187,26 @@ app.use((_req, res, next) => {
   next();
 });
 app.use(compression({ threshold: COMPRESSION_THRESHOLD }));
-app.use(express.json({ limit: process.env.BODY_LIMIT || "100kb" }));
+
+// Route-specific body parsers: batch endpoints accept larger payloads (2MB)
+// while all other routes are capped at 250kb to prevent memory-based DoS.
+// The batch parser must be registered before the general parser so the larger
+// limit only applies to batch endpoints.
+const BATCH_BODY_LIMIT = "2mb";
+const DEFAULT_BODY_LIMIT = "250kb";
+
+const batchJsonParser = express.json({ limit: BATCH_BODY_LIMIT });
+const defaultJsonParser = express.json({ limit: DEFAULT_BODY_LIMIT });
+
+const BATCH_ROUTE_PATTERN = /^\/api\/v1\/(simulate\/batch|batch)(\/|$)/i;
+
+app.use((req, res, next) => {
+  if (BATCH_ROUTE_PATTERN.test(req.path)) {
+    batchJsonParser(req, res, next);
+    return;
+  }
+  defaultJsonParser(req, res, next);
+});
 app.use(responseTimeMiddleware);
 app.use(ipFilterMiddleware);
 app.use(requestIdMiddleware);
