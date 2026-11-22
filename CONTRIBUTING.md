@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing! This guide covers everything you need to get started.
 
+> **First-time contributor?** Start with our step-by-step [Contributor Onboarding Walkthrough](./docs/contributing/onboarding-walkthrough.md) — an illustrated guide from cloning the repo to getting your first PR merged, including local setup troubleshooting.
+
 ## Table of Contents
 
 - [Fork and Clone](#fork-and-clone)

@@ -936,6 +936,8 @@ export default router;
 | Guide / Tutorial | Description |
 |---|---|
 | [Understanding Soroban Footprints](./docs/guides/understanding-footprints.md) | Beginner-friendly introduction to Soroban footprints and how this service simplifies them |
+| [Footprint Optimization Patterns](./docs/guides/footprint-optimization.md) | In-depth guide to minimizing Soroban resource fees with 5 concrete contract patterns |
+| [Contributor Onboarding Walkthrough](./docs/contributing/onboarding-walkthrough.md) | Step-by-step guide from cloning the repo to your first merged PR, including setup troubleshooting |
 | [Soroban State Archival & Restoration Lifecycle](./docs/guides/state-archival-and-restoration.md) | Deep dive into TTLs, rent, archival states, and recovering entries via `POST /api/v1/restore` |
 | [Next.js dApp Integration Tutorial](./docs/tutorials/nextjs-dapp-integration.md) | End-to-end React/Next.js tutorial with Freighter Wallet and copy-pasteable `useSorobanSimulation` hook |
 | [Freighter Wallet Integration Guide](./docs/guides/wallet-integration.md) | Wiring up Freighter browser wallet with the simulate → sign → submit flow |
@@ -1061,7 +1063,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for a full history of changes.
 
 ## 🤝 Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide covering fork/clone setup, local development, code style, commit format, PR process, and issue labels.
+Contributions are welcome! New contributors can follow the [Contributor Onboarding Walkthrough](./docs/contributing/onboarding-walkthrough.md) for a step-by-step path from clone to first merged PR, or see [CONTRIBUTING.md](./CONTRIBUTING.md) for the full reference covering fork/clone setup, local development, code style, commit format, PR process, and issue labels.
 
 Check out [ISSUES.md](ISSUES.md) for 150+ ideas on where to start.
 
