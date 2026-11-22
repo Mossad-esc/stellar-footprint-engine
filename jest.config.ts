@@ -26,12 +26,13 @@ const config: Config = {
     "!src/tests/**",
   ],
   coverageDirectory: "coverage",
-  coverageReporters: ["text", "lcov"],
+  coverageReporters: ["text", "lcov", "json-summary"],
   coverageThreshold: {
     global: {
-      branches: 65,
-      functions: 70,
-      lines: 75,
+      branches: 85,
+      functions: 90,
+      lines: 90,
+      statements: 90,
     },
   },
   moduleNameMapper: {

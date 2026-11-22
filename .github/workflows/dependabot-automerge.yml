@@ -1,14 +1,55 @@
 name: Dependabot Auto-merge
 
-on: pull_request
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
   pull-requests: write
+  checks: read
 
 jobs:
-  automerge:
+  verify:
+    name: Verify CI Checks
     runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Integration tests
+        run: pnpm run test:integration
+
+  automerge:
+    name: Auto-merge Dependabot PR
+    runs-on: ubuntu-latest
+    needs: verify
     if: github.actor == 'dependabot[bot]'
     steps:
       - name: Fetch Dependabot metadata
@@ -17,9 +58,25 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Enable auto-merge for patch updates
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Approve and auto-merge devDependencies patch/minor updates
+        if: |
+          steps.metadata.outputs.dependency-type == 'direct:development' &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require manual approval for major or production updates
+        if: |
+          steps.metadata.outputs.dependency-type != 'direct:development' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          echo "Manual maintainer approval required for dependency-type=${{ steps.metadata.outputs.dependency-type }}, update-type=${{ steps.metadata.outputs.update-type }}."
+          gh pr comment "$PR_URL" --body "CI checks passed, but manual maintainer approval is required for \`${{ steps.metadata.outputs.update-type }}\` on \`${{ steps.metadata.outputs.dependency-type }}\`."
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,72 @@
+groups:
+  - name: stellar-footprint-alerts
+    rules:
+      - alert: StellarRpcCircuitBreakerOpen
+        expr: rpc_circuit_breaker_state == 2
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stellar RPC circuit breaker is OPEN on {{ $labels.network }}"
+          description: >-
+            The RPC circuit breaker for network {{ $labels.network }} has tripped
+            to OPEN state for more than 30 seconds. Incoming simulation requests
+            are failing fast with 503 Service Unavailable.
+
+      - alert: HighSimulationErrorRate
+        expr: |
+          (
+            sum(rate(simulate_requests_total{status="failure"}[5m]))
+            /
+            sum(rate(simulate_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High simulation error rate (> 5% over 5m)"
+          description: >-
+            Simulation failure rate is {{ $value | humanizePercentage }} over the
+            last 5 minutes, exceeding the 5% warning threshold.
+
+      - alert: StellarRpcHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, network) (rate(simulate_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stellar RPC simulation p95 latency > 2s on {{ $labels.network }}"
+          description: >-
+            95th percentile simulation duration on {{ $labels.network }} has
+            exceeded 2 seconds (current value: {{ $value }}s) for 5 minutes.
+
+      - alert: RedisCacheUnavailable
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis cache is unavailable"
+          description: >-
+            The Redis exporter reports redis_up == 0 for more than 1 minute.
+            L2 caching is degraded and requests are falling back to L1/RPC.
+
+      - alert: HighMemoryUtilization
+        expr: |
+          (
+            container_memory_working_set_bytes{container="stellar-footprint-service"}
+            /
+            container_spec_memory_limit_bytes{container="stellar-footprint-service"}
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High container memory utilization (> 85%)"
+          description: >-
+            Container memory utilization for stellar-footprint-service is
+            {{ $value | humanizePercentage }} (threshold: 85%) for 5 minutes.
