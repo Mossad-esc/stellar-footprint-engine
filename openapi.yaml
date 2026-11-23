@@ -168,6 +168,11 @@ paths:
               schema:
                 type: string
                 enum: [HIT, MISS]
+            X-Simulation-Mode:
+              description: Simulation mode (live or dry-run)
+              schema:
+                type: string
+                enum: [live, dry-run]
           content:
             application/json:
               schema:
@@ -322,6 +327,64 @@ paths:
                 success: false
                 error: "Webhook job not found"
                 code: "JOB_NOT_FOUND"
+
+  /contract/{contractId}/ttl:
+    get:
+      tags: [simulation]
+      summary: Get contract TTL and expiration information
+      description: |
+        Returns the current TTL (time-to-live) and expiration ledger information
+        for a specific contract address. Queries the Stellar RPC for the contract
+        instance ledger entry and calculates remaining ledgers and estimated
+        wall-clock time until expiration (assuming 5-second ledger close time).
+      operationId: getContractTtl
+      parameters:
+        - name: contractId
+          in: path
+          required: true
+          description: Stellar contract address (StrKey format starting with 'C')
+          schema:
+            type: string
+            pattern: "^C[A-Z2-7]{55}$"
+            example: "CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE"
+        - name: network
+          in: query
+          required: false
+          description: Stellar network to query
+          schema:
+            type: string
+            enum: [testnet, mainnet, futurenet]
+            default: testnet
+      responses:
+        "200":
+          description: Contract TTL information retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContractTtlResponse"
+              example:
+                success: true
+                data:
+                  contractId: "CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE"
+                  liveUntilLedger: 12345678
+                  remainingLedgers: 50000
+                  estimatedExpirationDate: "2024-06-15T10:30:00.000Z"
+                  currentLedger: 12295678
+                  network: "testnet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Contract not found on the specified network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                error: "Contract not found on the specified network"
+                code: "JOB_NOT_FOUND"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /simulate/batch:
     post:
@@ -576,6 +639,53 @@ paths:
                 decoded:
                   fee: 100
                   operations: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /decode/batch:
+    post:
+      tags: [utilities]
+      summary: Batch decode multiple XDR strings
+      description: |
+        Decodes multiple base64-encoded XDR strings in a single request.
+        Accepts up to 25 items per batch. Each item is decoded independently,
+        so invalid XDRs in one item do not affect other items in the batch.
+      operationId: decodeBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecodeBatchRequest"
+            example:
+              items:
+                - id: "tx-1"
+                  xdr: "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg=="
+                  type: "transaction"
+                - id: "tx-2"
+                  xdr: "AAAABgAAAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAABQAAAAB"
+                  type: "ledger_key"
+      responses:
+        "200":
+          description: Batch decode completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecodeBatchResponse"
+              example:
+                results:
+                  - id: "tx-1"
+                    success: true
+                    decoded:
+                      fee: 100
+                      operations: []
+                  - id: "tx-2"
+                    success: true
+                    decoded:
+                      type: "contractData"
+                      contractId: "CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE"
         "400":
           $ref: "#/components/responses/BadRequest"
         "500":
@@ -915,6 +1025,11 @@ components:
           format: uri
           description: Optional HTTPS callback URL for asynchronous simulation delivery
           example: "https://hooks.example.com/stellar/simulate"
+        dryRun:
+          type: boolean
+          default: false
+          description: If true, performs a dry-run simulation locally without calling RPC. Can also be passed as query parameter ?dryRun=true
+          example: false
 
     ValidateRequest:
       type: object
@@ -1496,6 +1611,77 @@ components:
           type: object
           description: Human-readable JSON representation of the XDR
           additionalProperties: true
+
+    # ── Decode Batch ──────────────────────────────────────────────────────
+    DecodeBatchRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 25
+          minItems: 1
+          description: Array of XDR items to decode
+          items:
+            type: object
+            required: [xdr]
+            properties:
+              id:
+                type: string
+                description: Optional identifier for the item
+              xdr:
+                type: string
+                description: Base64-encoded XDR string to decode
+              type:
+                type: string
+                enum: [transaction, operation, ledger_key, auth_entry]
+                default: transaction
+
+    DecodeBatchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              success:
+                type: boolean
+              decoded:
+                type: object
+                additionalProperties: true
+              error:
+                type: string
+
+    # ── Contract TTL ──────────────────────────────────────────────────────
+    ContractTtlResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required: [contractId, liveUntilLedger, remainingLedgers, estimatedExpirationDate, currentLedger, network]
+          properties:
+            contractId:
+              type: string
+            liveUntilLedger:
+              type: integer
+            remainingLedgers:
+              type: integer
+            estimatedExpirationDate:
+              type: string
+              format: date-time
+              nullable: true
+            currentLedger:
+              type: integer
+            network:
+              type: string
+              enum: [testnet, mainnet, futurenet]
 
     # ── Restore ──────────────────────────────────────────────────────────────
     RestoreRequest:

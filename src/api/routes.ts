@@ -30,6 +30,8 @@ import {
   getSimulateHistory,
   rpcGateway,
   rpcStatus,
+  contractTtl,
+  decodeBatch,
 } from "./controllers";
 
 const router = Router();
@@ -114,5 +116,11 @@ router.post("/rpc", rpcGateway);
 
 // GET /openapi.json — serve raw OpenAPI spec as JSON
 router.get("/openapi.json", staticCacheMiddleware, openApiSpec);
+
+// GET /contract/:contractId/ttl — get contract TTL information
+router.get("/contract/:contractId/ttl", contractTtl);
+
+// POST /decode/batch — decode multiple XDR strings in a single request
+router.post("/decode/batch", decodeRateLimiter, decodeBatch);
 
 export default router;
