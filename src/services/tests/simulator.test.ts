@@ -10,7 +10,7 @@ import {
   INVALID_BASE64_XDR,
 } from "../../tests/fixtures/xdr";
 import * as footprintParser from "../footprintParser";
-import { simulateTransaction, simulateDryRun } from "../simulator";
+import { simulateTransaction, simulateDryRun, simulateDependentBatch } from "../simulator";
 
 jest.mock("@config/stellar", () => ({
   getNetworkConfig: jest.fn().mockReturnValue({
@@ -815,5 +815,58 @@ describe("static dry run", () => {
       totalWeight: null,
       isSufficient: null,
     });
+  });
+});
+
+describe("simulateDependentBatch", () => {
+  it("executes independent transactions in a single tier", async () => {
+    mockSimulate.mockResolvedValue(success());
+    const result = await simulateDependentBatch(
+      [
+        { xdr: SOROBAN_INVOKE_XDR },
+        { xdr: SOROBAN_INVOKE_XDR },
+      ],
+      "testnet",
+    );
+    expect(result.success).toBe(true);
+    expect(result.executionTrace).toHaveLength(1);
+    expect(result.executionTrace[0].indices).toEqual([0, 1]);
+    expect(result.results).toHaveLength(2);
+  });
+
+  it("executes dependent transactions in separate sequential tiers", async () => {
+    mockSimulate.mockResolvedValue(success());
+    const result = await simulateDependentBatch(
+      [
+        { xdr: SOROBAN_INVOKE_XDR },
+        { xdr: SOROBAN_INVOKE_XDR, dependsOn: [0] },
+      ],
+      "testnet",
+    );
+    expect(result.success).toBe(true);
+    expect(result.executionTrace).toHaveLength(2);
+    expect(result.executionTrace[0].indices).toEqual([0]);
+    expect(result.executionTrace[1].indices).toEqual([1]);
+  });
+
+  it("returns 400-style error for circular dependencies", async () => {
+    const result = await simulateDependentBatch(
+      [
+        { xdr: SOROBAN_INVOKE_XDR, dependsOn: [1] },
+        { xdr: SOROBAN_INVOKE_XDR, dependsOn: [0] },
+      ],
+      "testnet",
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/circular dependency/i);
+  });
+
+  it("returns error for out-of-range dependency index", async () => {
+    const result = await simulateDependentBatch(
+      [{ xdr: SOROBAN_INVOKE_XDR, dependsOn: [5] }],
+      "testnet",
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/out-of-range/i);
   });
 });

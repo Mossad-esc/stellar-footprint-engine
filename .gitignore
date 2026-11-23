@@ -5,6 +5,10 @@
 *.swp
 *.swo
 *.orig
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 
 # OS
 .DS_Store
@@ -40,6 +44,7 @@ __snapshots__/
 # JS / Node
 node_modules/
 coverage/
+.nyc_output/
 dist/
 build/
 .next/
@@ -57,11 +62,14 @@ package-lock.json
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
 # Env
 .env
 .env.*
 !.env.example
+.env.local
+.env.*.local
 
 # Misc
 *.bak

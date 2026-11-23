@@ -971,3 +971,121 @@ function buildThresholdReports(
   }
   return reports;
 }
+
+// ---------------------------------------------------------------------------
+// #36 — Batch Simulation Transaction Dependency Graph (DAG) Execution
+// ---------------------------------------------------------------------------
+
+export interface DependentTx {
+  xdr: string;
+  dependsOn?: number[]; // indices of transactions this one depends on
+  ledgerSequence?: number;
+}
+
+export interface DependentBatchResult {
+  success: boolean;
+  results: Array<SimulateResult & { index: number; tier: number }>;
+  executionTrace: Array<{ tier: number; indices: number[] }>;
+  error?: string;
+}
+
+export async function simulateDependentBatch(
+  transactions: DependentTx[],
+  network: Network = "testnet",
+  signal?: AbortSignal,
+): Promise<DependentBatchResult> {
+  // 1. Validate all dependsOn indices are valid
+  for (let i = 0; i < transactions.length; i++) {
+    for (const dep of transactions[i].dependsOn ?? []) {
+      if (dep < 0 || dep >= transactions.length || dep === i) {
+        return {
+          success: false,
+          results: [],
+          executionTrace: [],
+          error: `Invalid dependency: transaction ${i} depends on out-of-range index ${dep}`,
+        };
+      }
+    }
+  }
+
+  // 2. Topological sort — detect cycles using Kahn's algorithm
+  const inDegree = new Array<number>(transactions.length).fill(0);
+  const adj: number[][] = transactions.map(() => []);
+  for (let i = 0; i < transactions.length; i++) {
+    for (const dep of transactions[i].dependsOn ?? []) {
+      adj[dep].push(i);
+      inDegree[i]++;
+    }
+  }
+
+  // Build tiers
+  const tiers: number[][] = [];
+  let queue = transactions.map((_, i) => i).filter((i) => inDegree[i] === 0);
+  const processed = new Set<number>();
+
+  while (queue.length > 0) {
+    tiers.push([...queue]);
+    const next: number[] = [];
+    for (const node of queue) {
+      processed.add(node);
+      for (const neighbor of adj[node]) {
+        inDegree[neighbor]--;
+        if (inDegree[neighbor] === 0) next.push(neighbor);
+      }
+    }
+    queue = next;
+  }
+
+  if (processed.size !== transactions.length) {
+    // Cycle detected — find which indices are in the cycle
+    const cycleNodes = transactions
+      .map((_, i) => i)
+      .filter((i) => !processed.has(i));
+    return {
+      success: false,
+      results: [],
+      executionTrace: [],
+      error: `Circular dependency detected among transaction indices: ${cycleNodes.join(", ")}`,
+    };
+  }
+
+  // 3. Execute tiers — independent within a tier (parallel), dependent tiers in sequence
+  const results: Array<SimulateResult & { index: number; tier: number }> = [];
+  const executionTrace: Array<{ tier: number; indices: number[] }> = [];
+
+  for (let tierIndex = 0; tierIndex < tiers.length; tierIndex++) {
+    const tier = tiers[tierIndex];
+    executionTrace.push({ tier: tierIndex, indices: tier });
+
+    const tierResults = await Promise.all(
+      tier.map(async (txIndex) => {
+        const { xdr, ledgerSequence } = transactions[txIndex];
+        try {
+          const result = await simulateTransaction(
+            xdr,
+            network,
+            signal,
+            ledgerSequence,
+          );
+          return { ...result, index: txIndex, tier: tierIndex };
+        } catch (err) {
+          return {
+            success: false,
+            error:
+              err instanceof Error ? err.message : "Simulation failed",
+            index: txIndex,
+            tier: tierIndex,
+          } as SimulateResult & { index: number; tier: number };
+        }
+      }),
+    );
+
+    results.push(...tierResults);
+  }
+
+  return {
+    success: results.every((r) => r.success),
+    results,
+    executionTrace,
+  };
+}

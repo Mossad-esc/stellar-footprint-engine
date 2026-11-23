@@ -539,6 +539,13 @@ You can also test the API using the [Postman collection](./docs/postman/stellar-
 
 You can also test the API using the [Postman collection](./docs/postman/stellar-footprint-service.postman_collection.json). Import this collection into Postman to get started quickly.
 
+### Interactive Documentation
+
+- **Interactive Docs (Scalar):** `GET /docs` — modern interactive documentation with live request testing
+- **Swagger UI:** `GET /api-docs` — classic Swagger documentation (backwards compatible)
+
+> Both documentation UIs are only available in non-production environments.
+
 ### `POST /api/simulate`
 
 Simulate a Soroban transaction and extract its footprint.

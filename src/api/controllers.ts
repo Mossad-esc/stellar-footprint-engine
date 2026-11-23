@@ -11,11 +11,13 @@ import {
 } from "@services/feeEstimator";
 import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { calculateFootprintStats } from "@services/footprintExtractor";
-import { getNetworkStatus } from "@services/networkStatus";
+import { getNetworkStatus, getNetworkLimits } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
 import {
   simulateTransaction,
   simulateDryRun as analyzeDryRun,
+  simulateDependentBatch,
+  type DependentTx,
 } from "@services/simulator";
 import { validateXdr } from "@services/validator";
 import {
@@ -1008,3 +1010,106 @@ export function getSimulationJob(
   };
   res.status(HTTP_STATUS.OK).json(response);
 }
+
+// ---------------------------------------------------------------------------
+// #37 — Network Protocol Version & Ledger Resource Limits Endpoint
+// ---------------------------------------------------------------------------
+
+export async function getNetworkLimitsController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const networkParam = (req.query.network as string) || DEFAULT_NETWORK;
+  const network = networkParam as Network;
+
+  if (
+    network !== NETWORKS.MAINNET &&
+    network !== NETWORKS.TESTNET &&
+    network !== NETWORKS.FUTURENET
+  ) {
+    return next(
+      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
+    );
+  }
+
+  try {
+    const data = await getNetworkLimits(network);
+    const response: ResponseEnvelope = { success: true, data };
+    res.status(HTTP_STATUS.OK).json(response);
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #36 — Batch Simulation Transaction Dependency Graph (DAG) Execution
+// ---------------------------------------------------------------------------
+
+export async function simulateDependentBatchController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const { transactions, network } = req.body as {
+    transactions?: DependentTx[];
+    network?: Network;
+  };
+
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    return next(
+      new AppError(
+        "Missing required field: transactions (must be a non-empty array)",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+
+  for (let i = 0; i < transactions.length; i++) {
+    const tx = transactions[i];
+    if (!tx.xdr || typeof tx.xdr !== "string") {
+      return next(
+        new AppError(
+          `Transaction at index ${i} is missing required field: xdr`,
+          HTTP_STATUS.BAD_REQUEST,
+        ),
+      );
+    }
+  }
+
+  if (
+    network &&
+    network !== NETWORKS.MAINNET &&
+    network !== NETWORKS.TESTNET &&
+    network !== NETWORKS.FUTURENET
+  ) {
+    return next(
+      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
+    );
+  }
+
+  const net: Network = (network as Network) || DEFAULT_NETWORK;
+
+  try {
+    const result = await simulateDependentBatch(
+      transactions,
+      net,
+      res.locals.abortSignal as AbortSignal | undefined,
+    );
+
+    if (!result.success && result.error?.toLowerCase().includes("circular dependency")) {
+      return next(
+        new AppError(result.error, HTTP_STATUS.BAD_REQUEST),
+      );
+    }
+
+    res.status(HTTP_STATUS.OK).json({ success: true, data: result });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
+}
+

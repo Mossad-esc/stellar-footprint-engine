@@ -142,3 +142,38 @@ describe("gzip compression (#428)", () => {
     expect(res.headers["content-encoding"] ?? "").not.toBe("gzip");
   });
 });
+
+describe("brotli compression (#38)", () => {
+  it("compresses large responses with Content-Encoding: br when Accept-Encoding: br", async () => {
+    mockSimulate.mockResolvedValueOnce(makeLargeResult(THRESHOLD * 4));
+
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .set("Accept-Encoding", "br")
+      .send({ xdr: VALID_XDR, network: "testnet" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-encoding"]).toBe("br");
+  });
+
+  it("does NOT brotli-compress health endpoints even with Accept-Encoding: br", async () => {
+    const res = await request(app)
+      .get("/api/v1/health")
+      .set("Accept-Encoding", "br");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-encoding"] ?? "").not.toBe("br");
+  });
+
+  it("does not brotli-compress small responses below the threshold", async () => {
+    mockSimulate.mockResolvedValueOnce(makeSmallResult());
+
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .set("Accept-Encoding", "br")
+      .send({ xdr: VALID_XDR, network: "testnet" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-encoding"] ?? "").not.toBe("br");
+  });
+});

@@ -19,6 +19,8 @@ import {
   supportedNetworks,
   simulateDryRun,
   getSimulateHistory,
+  getNetworkLimitsController,
+  simulateDependentBatchController,
 } from "./controllers";
 import {
   simulateRateLimiter,
@@ -52,6 +54,9 @@ router.get("/simulate/history", getSimulateHistory);
 // GET /simulate/jobs/:jobId — inspect async webhook simulation delivery status
 router.get("/simulate/jobs/:jobId", getSimulationJob);
 
+// POST /simulate/batch/dag — dependency-graph-aware batch simulation with topological execution
+router.post("/simulate/batch/dag", simulateDependentBatchController);
+
 // POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
 router.post("/simulate/batch", simulateBatch);
 
@@ -60,6 +65,9 @@ router.get("/simulate/cost-breakdown", costBreakdownController);
 
 // GET /network/status — returns current network information
 router.get("/network/status", networkStatus);
+
+// GET /network/limits — returns protocol version and resource limits for the network
+router.get("/network/limits", getNetworkLimitsController);
 
 // POST /footprint/diff — compares two footprints and returns differences
 router.post("/footprint/diff", footprintDiffController);
