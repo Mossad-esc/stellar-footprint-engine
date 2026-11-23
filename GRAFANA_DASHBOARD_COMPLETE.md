@@ -8,15 +8,40 @@ The Grafana dashboard for Stellar Footprint Service monitoring has been successf
 
 ## 📊 What Was Built
 
-### Grafana Dashboard with 7 Panels
+### Grafana Dashboard with 11 Panels (`monitoring/grafana/dashboards/stellar-footprint.json`)
 
 1. ✅ **Request Rate** - Real-time HTTP requests per second
 2. ✅ **Error Rate** - Percentage of failed requests (4xx/5xx)
-3. ✅ **Latency Percentiles** - P50, P95, P99 response times
-4. ✅ **Cache Hit Rate** - Simulation cache effectiveness
+3. ✅ **Latency Percentiles** - P50, P95, P99 HTTP response times
+4. ✅ **Cache Hit Rate** - Overall simulation cache effectiveness
 5. ✅ **Active Simulations** - Concurrent request gauge
 6. ✅ **Status Code Distribution** - HTTP response breakdown
 7. ✅ **Network Usage** - Mainnet vs Testnet usage
+8. ✅ **L1 In-Memory vs L2 Redis Hit Rate** - Tiered cache hit rates (`cache_hits_total` / `cache_misses_total` for L1 memory vs L2 Redis) and `get` throughput by backend (`cache_operation_duration_seconds_count`)
+9. ✅ **Simulation Duration Percentiles per Network (p50, p95, p99)** - Per-network `simulate_duration_seconds_bucket` quantiles in milliseconds
+10. ✅ **Circuit Breaker State per Network** - Gauge mapping `rpc_circuit_breaker_state` (`0` = CLOSED, `1` = HALF-OPEN, `2` = OPEN)
+11. ✅ **Top 10 Most Simulated Contract IDs** - Table ranking top contracts by 24h simulation volume (`topk(10, sum by (contract_id) (increase(simulate_requests_total[24h])))`)
+
+### Panel Layout & Previews
+
+```
+┌──────────────────────────────────┬──────────────────────────────────┐
+│ 1. Request Rate (timeseries)     │ 2. Error Rate (timeseries)       │
+├──────────────────────────────────┴──────────────────────────────────┤
+│ 3. Latency Percentiles P50 / P95 / P99 (timeseries, full width)     │
+├──────────────────────────────────┬──────────────────────────────────┤
+│ 4. Cache Hit Rate (timeseries)   │ 5. Active Simulations            │
+├──────────────────────────────────┼──────────────────────────────────┤
+│ 6. Status Code Distribution      │ 7. Network Usage Distribution    │
+├──────────────────────────────────┼──────────────────────────────────┤
+│ 8. L1 vs L2 Cache Hit Rate       │ 9. Sim Duration p50/p95/p99/Net  │
+├──────────────────────────────────┼──────────────────────────────────┤
+│ 10. Circuit Breaker State (gauge)│ 11. Top 10 Contract IDs (table)  │
+└──────────────────────────────────┴──────────────────────────────────┘
+```
+
+> [!NOTE]
+> Live Grafana screenshots can be captured after starting the monitoring stack (`docker-compose -f docker-compose.prod.yml up -d`) at `http://localhost:3001`.
 
 ### Complete Monitoring Infrastructure
 

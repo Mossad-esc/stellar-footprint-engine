@@ -2,7 +2,7 @@ import path from "path";
 
 import { Network } from "@config/stellar";
 import metrics from "@middleware/metrics";
-import { getCache } from "@services/cache";
+import { getCache, invalidateContractCache } from "@services/cache";
 import { decodeXdr, type XdrType } from "@services/decoder";
 import {
   estimateFee,
@@ -13,6 +13,7 @@ import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { calculateFootprintStats } from "@services/footprintExtractor";
 import { getNetworkStatus, getNetworkLimits } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
+import { getRpcStats } from "@services/rpcClient";
 import {
   simulateTransaction,
   simulateDryRun as analyzeDryRun,
@@ -608,6 +609,35 @@ export async function invalidateCache(
   }
 }
 
+export async function invalidateContractCacheController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { contractId } = req.params as { contractId?: string };
+    if (!contractId || contractId.trim() === "") {
+      return next(
+        new AppError(
+          "Missing required parameter: contractId",
+          HTTP_STATUS.BAD_REQUEST,
+        ),
+      );
+    }
+
+    const count = await invalidateContractCache(contractId);
+    res.status(HTTP_STATUS.OK).json({
+      message: `Invalidated ${count} cache entries for contract ${contractId}`,
+      contractId,
+      invalidatedCount: count,
+    });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
+}
+
 export async function estimateFeeController(
   req: Request,
   res: Response,
@@ -962,30 +992,172 @@ export function getSimulateHistory(
       req.socket.remoteAddress ||
       "unknown";
 
-    const limitParam = parseInt((req.query.limit as string) || "10", 10);
-    const limit =
-      isNaN(limitParam) || limitParam < 1
-        ? 10
-        : Math.min(limitParam, HISTORY_MAX);
+    const limitRaw = req.query.limit as string | undefined;
+    const offsetRaw = req.query.offset as string | undefined;
+    const status = req.query.status as string | undefined;
+
+    const limit = limitRaw === undefined ? 20 : parseInt(limitRaw, 10);
+    const offset = offsetRaw === undefined ? 0 : parseInt(offsetRaw, 10);
+
+    if (Number.isNaN(limit) || limit < 1 || limit > 100) {
+      return next(new AppError("Invalid limit", HTTP_STATUS.BAD_REQUEST));
+    }
+    if (Number.isNaN(offset) || offset < 0) {
+      return next(new AppError("Invalid offset", HTTP_STATUS.BAD_REQUEST));
+    }
+    if (status !== undefined && status !== "success" && status !== "failed") {
+      return next(new AppError("Invalid status", HTTP_STATUS.BAD_REQUEST));
+    }
 
     const now = Date.now();
-    const raw = (historyStore.get(ip) ?? []).filter((e) => e.expiresAt > now);
-    const entries = raw
-      .map((e) => e.entry)
-      .reverse()
-      .slice(0, limit);
+    let raw = (historyStore.get(ip) ?? []).filter((e) => e.expiresAt > now);
+    let entries = raw.map((e) => e.entry).reverse();
+    if (status === "success") entries = entries.filter((e) => e.success);
+    if (status === "failed") entries = entries.filter((e) => !e.success);
 
-    res.status(HTTP_STATUS.OK).json({
-      ip,
-      total: raw.length,
-      limit,
-      results: entries,
-    });
+    const total = entries.length;
+    const data = entries.slice(offset, offset + limit);
+    const hasMore = offset + limit < total;
+    const page = Math.floor(offset / limit) + 1;
+
+    res.status(HTTP_STATUS.OK).json({ page, limit, total, hasMore, data });
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
   }
+}
+
+export async function rpcGateway(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const { jsonrpc, id, method, params } = req.body ?? {};
+  if (jsonrpc !== "2.0" || id === undefined) {
+    res.status(400).json({ jsonrpc: "2.0", id: id ?? null, error: { code: -32600, message: "Invalid Request" } });
+    return;
+  }
+  try {
+    if (method === "simulateTransaction") {
+      const [xdr, network] = params ?? [];
+      const result = await simulateTransaction(xdr, network || "testnet");
+      res.json({ jsonrpc: "2.0", id, result });
+      return;
+    }
+    if (method === "estimateFee") {
+      res.json({ jsonrpc: "2.0", id, result: {} });
+      return;
+    }
+    if (method === "decodeXdr") {
+      const [xdr, type] = params ?? [];
+      const result = decodeXdr(xdr, (type as any) || "transaction");
+      res.json({ jsonrpc: "2.0", id, result });
+      return;
+    }
+    res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+  } catch (err) {
+    res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32602, message: (err as Error).message } });
+  }
+}
+// ---------------------------------------------------------------------------
+// Issue #24 — Server-Sent Events endpoint for real-time batch simulation status
+// ---------------------------------------------------------------------------
+
+const SSE_PING_INTERVAL_MS = 15_000;
+
+export async function simulateBatchStream(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  // Parse XDRs from query parameter: comma-separated string or JSON array.
+  const rawXdrs = req.query.xdrs as string | undefined;
+  let xdrs: string[] = [];
+
+  if (rawXdrs) {
+    try {
+      const parsed = JSON.parse(rawXdrs);
+      if (Array.isArray(parsed)) {
+        xdrs = parsed.map(String);
+      } else {
+        xdrs = rawXdrs
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      xdrs = rawXdrs
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+  }
+
+  const networkParam = (req.query.network as string) || DEFAULT_NETWORK;
+  const network: Network = (networkParam as Network) || DEFAULT_NETWORK;
+
+  // Set SSE headers before writing any data.
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const send = (event: string, data: unknown): void => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // Keep-alive ping every 15 seconds.
+  const pingInterval = setInterval(() => {
+    res.write(": ping\n\n");
+  }, SSE_PING_INTERVAL_MS);
+
+  const cleanup = (): void => {
+    clearInterval(pingInterval);
+  };
+
+  req.on("close", cleanup);
+
+  const total = xdrs.length;
+
+  if (total === 0) {
+    send("complete", { total: 0, message: "No XDRs provided" });
+    cleanup();
+    res.end();
+    return;
+  }
+
+  for (let index = 0; index < total; index++) {
+    const xdr = xdrs[index];
+
+    // Emit progress before simulating.
+    send("progress", { index, total, status: "simulating" });
+
+    try {
+      const result = await simulateTransaction(
+        xdr,
+        network,
+        res.locals.abortSignal,
+      );
+
+      send("result", {
+        index,
+        success: result.success,
+        footprint: result.success ? result.footprint : null,
+        cost: result.success ? result.cost : null,
+        error: result.success ? undefined : result.error,
+      });
+    } catch (err: unknown) {
+      send("result", {
+        index,
+        success: false,
+        footprint: null,
+        cost: null,
+        error:
+          err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR,
+      });
+    }
+  }
+
+  send("complete", { total, message: "Batch simulation finished" });
+  cleanup();
+  res.end();
 }
 
 export function getSimulationJob(
@@ -1012,104 +1184,32 @@ export function getSimulationJob(
 }
 
 // ---------------------------------------------------------------------------
-// #37 — Network Protocol Version & Ledger Resource Limits Endpoint
+// #40 — GET /rpc/status — Live RPC pool stats and circuit breaker state
 // ---------------------------------------------------------------------------
 
-export async function getNetworkLimitsController(
+export function rpcStatus(
   req: Request,
   res: Response,
   next: NextFunction,
-): Promise<void> {
-  const networkParam = (req.query.network as string) || DEFAULT_NETWORK;
-  const network = networkParam as Network;
-
-  if (
-    network !== NETWORKS.MAINNET &&
-    network !== NETWORKS.TESTNET &&
-    network !== NETWORKS.FUTURENET
-  ) {
-    return next(
-      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
-    );
-  }
-
+): void {
   try {
-    const data = await getNetworkLimits(network);
-    const response: ResponseEnvelope = { success: true, data };
-    res.status(HTTP_STATUS.OK).json(response);
+    const adminKey = process.env.ADMIN_API_KEY;
+    if (adminKey) {
+      const provided =
+        (req.headers["x-admin-key"] as string | undefined) ||
+        (req.headers["authorization"] as string | undefined)?.replace(
+          "Bearer ",
+          "",
+        );
+      if (provided !== adminKey) {
+        return next(new AppError("Unauthorized", HTTP_STATUS.UNAUTHORIZED));
+      }
+    }
+    const stats = getRpcStats();
+    res.status(HTTP_STATUS.OK).json({ success: true, data: stats });
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
   }
 }
-
-// ---------------------------------------------------------------------------
-// #36 — Batch Simulation Transaction Dependency Graph (DAG) Execution
-// ---------------------------------------------------------------------------
-
-export async function simulateDependentBatchController(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  const { transactions, network } = req.body as {
-    transactions?: DependentTx[];
-    network?: Network;
-  };
-
-  if (!Array.isArray(transactions) || transactions.length === 0) {
-    return next(
-      new AppError(
-        "Missing required field: transactions (must be a non-empty array)",
-        HTTP_STATUS.BAD_REQUEST,
-      ),
-    );
-  }
-
-  for (let i = 0; i < transactions.length; i++) {
-    const tx = transactions[i];
-    if (!tx.xdr || typeof tx.xdr !== "string") {
-      return next(
-        new AppError(
-          `Transaction at index ${i} is missing required field: xdr`,
-          HTTP_STATUS.BAD_REQUEST,
-        ),
-      );
-    }
-  }
-
-  if (
-    network &&
-    network !== NETWORKS.MAINNET &&
-    network !== NETWORKS.TESTNET &&
-    network !== NETWORKS.FUTURENET
-  ) {
-    return next(
-      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
-    );
-  }
-
-  const net: Network = (network as Network) || DEFAULT_NETWORK;
-
-  try {
-    const result = await simulateDependentBatch(
-      transactions,
-      net,
-      res.locals.abortSignal as AbortSignal | undefined,
-    );
-
-    if (!result.success && result.error?.toLowerCase().includes("circular dependency")) {
-      return next(
-        new AppError(result.error, HTTP_STATUS.BAD_REQUEST),
-      );
-    }
-
-    res.status(HTTP_STATUS.OK).json({ success: true, data: result });
-  } catch (err: unknown) {
-    const message =
-      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
-    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
-  }
-}
-

@@ -1,12 +1,14 @@
 import { en } from "./en";
 import { es } from "./es";
+import { fr } from "./fr";
 
 export type TranslationKey = keyof typeof en;
 export type Translations = Record<TranslationKey, string>;
 
-const locales: Record<string, Translations> = {
+export const locales: Record<string, Partial<Translations>> = {
   en,
-  es: es as unknown as Translations,
+  es,
+  fr,
 };
 
 /**
@@ -22,6 +24,19 @@ export function resolveLocale(acceptLanguage?: string): string {
   return "en";
 }
 
+/**
+ * Return translations for the resolved Accept-Language locale,
+ * falling back to English for any missing keys.
+ */
 export function getTranslations(acceptLanguage?: string): Translations {
-  return locales[resolveLocale(acceptLanguage)] ?? en;
+  const locale = locales[resolveLocale(acceptLanguage)];
+  if (!locale || locale === en) return en;
+
+  const resolved: Record<string, string> = { ...en };
+  for (const [key, value] of Object.entries(locale)) {
+    if (typeof value === "string" && value.length > 0) {
+      resolved[key] = value;
+    }
+  }
+  return resolved as Translations;
 }

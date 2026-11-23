@@ -79,3 +79,17 @@ pnpm-debug.log*
 nginx/certs/*.pem
 nginx/certs/*.crt
 nginx/certs/*.key
+
+**/__snapshots__/
+**/*.snap
+# Misc PR/planning docs at root (don't track these)
+PR_DESCRIPTION.md
+PR_MESSAGES.md
+PR_SUMMARY.md
+PLAN.md
+GRAFANA_DASHBOARD_COMPLETE.md
+IMPLEMENTATION_INDEX.md
+
+# test snapshots
+**/__snapshots__/
+**/*.snap

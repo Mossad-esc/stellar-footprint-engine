@@ -1,7 +1,46 @@
 import { Network, getRpcServer, getNetworkConfig } from "../config/stellar";
 import { CACHE_TTL } from "../constants";
+import { logger } from "../utils/logger";
 
-export interface NetworkStatusResult {
+// ---------------------------------------------------------------------------
+// Issue #70 — Cache getLatestLedger sequence (2s TTL)
+// ---------------------------------------------------------------------------
+interface LedgerCacheEntry {
+  sequence: number;
+  closeTime: number;
+  timestamp: number;
+}
+const ledgerCache = new Map<Network, LedgerCacheEntry>();
+const LEDGER_CACHE_TTL_MS = 2000;
+
+let ledgerCacheHits = 0;
+let ledgerCacheMisses = 0;
+
+export function getLedgerCacheStats(): { hits: number; misses: number } {
+  return { hits: ledgerCacheHits, misses: ledgerCacheMisses };
+}
+
+export async function getLatestLedgerCached(
+  network: Network = "testnet",
+  forceRefresh = false,
+): Promise<{ sequence: number; closeTime: number }> {
+  const now = Date.now();
+  const cached = ledgerCache.get(network);
+  if (!forceRefresh && cached && now - cached.timestamp < LEDGER_CACHE_TTL_MS) {
+    ledgerCacheHits++;
+    return { sequence: cached.sequence, closeTime: cached.closeTime };
+  }
+  ledgerCacheMisses++;
+  const server = getRpcServer(network);
+  const latest = await server.getLatestLedger();
+  const entry: LedgerCacheEntry = {
+    sequence: latest.sequence,
+    closeTime: (latest as { closeTime?: number }).closeTime ?? now,
+    timestamp: now,
+  };
+  ledgerCache.set(network, entry);
+  return { sequence: entry.sequence, closeTime: entry.closeTime };
+}
   ledger: number;
   baseFee: string;
   networkPassphrase: string;
@@ -64,31 +103,42 @@ export async function getNetworkStatus(
   };
 
   cache.set(network, { data: result, timestamp: now });
+
+  // Notify any registered broadcast listeners (e.g. WebSocket gateway).
+  emitLedgerClose(network, result);
+
   return result;
 }
 
-export async function getNetworkLimits(
-  network: Network = "testnet",
-): Promise<NetworkLimitsResult> {
-  const now = Date.now();
-  const cached = limitsCache.get(network);
+// ---------------------------------------------------------------------------
+// Issue #25 — Ledger-close event broadcasting for WebSocket subscribers
+// ---------------------------------------------------------------------------
 
-  if (cached && now - cached.timestamp < LIMITS_CACHE_TTL_MS) {
-    return cached.data;
+type LedgerCloseListener = (
+  network: Network,
+  status: NetworkStatusResult,
+) => void;
+
+const ledgerCloseListeners = new Set<LedgerCloseListener>();
+
+/**
+ * Register a callback that will be invoked whenever a fresh ledger-close
+ * status is fetched from an RPC server.
+ */
+export function onLedgerClose(listener: LedgerCloseListener): () => void {
+  ledgerCloseListeners.add(listener);
+  return () => ledgerCloseListeners.delete(listener);
+}
+
+function emitLedgerClose(network: Network, status: NetworkStatusResult): void {
+  for (const listener of ledgerCloseListeners) {
+    try {
+      listener(network, status);
+    } catch (err) {
+      logger.warn(
+        { err },
+        "networkStatus: uncaught error in ledgerClose listener",
+      );
+    }
   }
-
-  const server = getRpcServer(network);
-  const latestLedger = await server.getLatestLedger();
-
-  const result: NetworkLimitsResult = {
-    protocolVersion: latestLedger.protocolVersion,
-    limits: {
-      maxContractCpuInstructions: 100_000_000,
-      maxMemoryBytes: 40_960_000,
-      maxFootprintEntries: 64,
-    },
-  };
-
-  limitsCache.set(network, { data: result, timestamp: now });
-  return result;
 }

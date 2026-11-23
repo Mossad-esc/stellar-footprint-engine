@@ -200,6 +200,7 @@ response remains `{ "success": true, "data": { "added": ..., "removed": ..., "un
 
 ## Further reading
 
+- [Footprint Optimization Patterns](./footprint-optimization.md) - Architectural patterns to reduce footprint size and minimize Soroban resource fees
 - [API Documentation](../api/README.md) - Complete reference for all endpoints
 - [Integration Examples](../examples/) - Code samples in multiple languages
 - [Postman Collection](../postman/) - Ready-to-use API testing collection

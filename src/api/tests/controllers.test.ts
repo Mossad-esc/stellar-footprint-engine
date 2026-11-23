@@ -272,6 +272,31 @@ describe("POST /api/v1/simulate", () => {
     });
   });
 
+  it("returns 422 with RESOURCE_LIMIT_EXCEEDED code and remediation when CPU limit is exceeded", async () => {
+    const mockResult = {
+      success: false,
+      type: "simulation_error" as const,
+      error: "Transaction exceeded CPU instruction limit.",
+      remediation: "Consider splitting the operation into multiple transactions or optimizing loops.",
+      resourceExceeded: "cpu_instructions",
+      code: "RESOURCE_LIMIT_EXCEEDED",
+    };
+    mockSimulateTransaction.mockResolvedValueOnce(mockResult);
+
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .send({ xdr: VALID_XDR, network: "testnet" });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({
+      success: false,
+      error: "Transaction exceeded CPU instruction limit.",
+      remediation: "Consider splitting the operation into multiple transactions or optimizing loops.",
+      resourceExceeded: "cpu_instructions",
+      code: "RESOURCE_LIMIT_EXCEEDED",
+    });
+  });
+
   it("returns 500 when simulateTransaction throws an Error", async () => {
     mockSimulateTransaction.mockRejectedValueOnce(
       new Error("RPC connection refused"),

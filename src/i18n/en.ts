@@ -1,5 +1,6 @@
 export const en = {
   MISSING_XDR: "Missing required field: xdr",
+  UNSUPPORTED_ENVELOPE_TYPE: "Unsupported transaction envelope type",
   INVALID_NETWORK: "Invalid network. Use 'testnet', 'mainnet', or 'futurenet'",
   RPC_URL_NOT_CONFIGURED: "RPC URL not configured for network",
   LEDGER_ENTRY_RESTORATION_REQUIRED:
@@ -7,6 +8,28 @@ export const en = {
   TRANSACTION_DATA_MISSING:
     "Simulation succeeded but transactionData is missing; cannot extract footprint.",
   UNEXPECTED_ERROR: "Unexpected error",
-  CIRCUIT_OPEN: "Service temporarily unavailable. Please retry later.",
+  INTERNAL_SERVER_ERROR: "Internal server error",
+  BAD_REQUEST: "Bad request",
+  UNPROCESSABLE_ENTITY: "Unprocessable entity",
+  FORBIDDEN: "Forbidden",
+  RATE_LIMIT_EXCEEDED: "Too many requests. Please try again later.",
+  REQUEST_TIMEOUT: "Request timed out",
   REQUEST_TIMED_OUT: "Request timed out",
+  CONTENT_TYPE_INVALID: "Content-Type must be application/json",
+  OPENAPI_SPEC_NOT_FOUND: "OpenAPI spec not found",
+  INVALID_XDR: "Invalid XDR",
+  INVALID_XDR_TYPE: "Invalid XDR type",
+  MISSING_REQUIRED_FIELDS: "Missing required fields",
+  INVALID_QUERY_PARAMETERS: "Invalid query parameters",
+  INVALID_LEDGER_SEQUENCE: "ledgerSequence must be a positive integer",
+  BATCH_SIZE_EXCEEDED: "Batch size exceeded maximum allowed limit",
+  TRANSACTION_MISSING_SOROBAN_OPERATION:
+    "Transaction must contain a Soroban operation (invokeHostFunction).",
+  RPC_SIMULATION_ERROR: "Transaction simulation failed",
+  SIMULATION_RESTORE_REQUIRED: "Simulation requires ledger entry restoration",
+  SIMULATION_DATA_MISSING: "Simulation data is missing",
+  RESOURCE_LIMIT_EXCEEDED: "Soroban resource limit exceeded",
+  CIRCUIT_OPEN: "Service temporarily unavailable. Please retry later.",
+  JOB_NOT_FOUND: "Webhook job not found",
+  UNAUTHORIZED: "Unauthorized",
 } as const;

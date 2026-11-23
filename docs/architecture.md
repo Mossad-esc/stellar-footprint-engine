@@ -89,6 +89,10 @@ After a successful simulation the raw footprint is extracted from the `SorobanTr
 
 Manages `SorobanRpc.Server` instances per network with connection pooling. Instances are reused for `RPC_POOL_TTL_MS` before being recreated, avoiding the overhead of establishing a new connection on every request.
 
+### Async Webhooks (`src/services/webhook.ts`)
+
+Supports non-blocking transaction simulation when a `webhookUrl` is provided. Creates an in-memory job (`202 Accepted` with `jobId`), delivers the simulation result asynchronously via HTTPS `POST` with up to 3 retry attempts, and signs payloads with HMAC-SHA256 (`X-Webhook-Signature`). See [ADR 004: Async Webhook System Architecture](./adr/004-async-webhook-architecture.md) for delivery guarantees, security details, and trade-offs.
+
 ## Error Paths
 
 | Scenario | HTTP Status | Response |

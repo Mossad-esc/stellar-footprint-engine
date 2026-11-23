@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing! This guide covers everything you need to get started.
 
+> **First-time contributor?** Start with our step-by-step [Contributor Onboarding Walkthrough](./docs/contributing/onboarding-walkthrough.md) — an illustrated guide from cloning the repo to getting your first PR merged, including local setup troubleshooting.
+
 ## Table of Contents
 
 - [Fork and Clone](#fork-and-clone)
@@ -79,6 +81,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 | Script | Description |
 |---|---|
 | `pnpm run dev` | Start dev server with hot reload |
+| `pnpm run repl` | Launch interactive Node.js REPL with SDK, RPC client, parsers, fee estimator, and cache pre-loaded |
 | `pnpm run build` | Compile TypeScript |
 | `pnpm run typecheck` | Run TypeScript type checking without emitting files |
 | `pnpm run start` | Start production server |
@@ -87,11 +90,23 @@ Thank you for your interest in contributing! This guide covers everything you ne
 | `pnpm run format` | Format code with Prettier |
 | `pnpm run format:check` | Check formatting without writing |
 | `pnpm test` | Run test suite |
+| `pnpm run test:mutation` | Run Stryker mutation tests on core footprint parser & optimizer |
 | `pnpm test --updateSnapshot` | Refresh Jest snapshots after intentional response shape changes |
+| `pnpm run seed:testnet` | Fund a Testnet account via Friendbot, deploy a mock token contract, and print test XDRs |
+
+### Seeding Testnet Contracts for Simulation Testing
+
+If you need fresh Testnet contract IDs and transaction XDRs for testing simulations locally, run:
+
+```bash
+pnpm run seed:testnet
+```
+
+Pass `--json` to output machine-readable JSON. The script creates and funds a random Testnet account via Friendbot, deploys a mock Stellar Asset Contract (`MOCK`), and prints the contract ID, deployment transaction XDR, and a sample invocation XDR.
 
 ### Updating Jest snapshots
 
-Snapshot coverage in this repository is maintained through Jest snapshots. When an endpoint response shape intentionally changes, refresh the snapshots with:
+Snapshot coverage in this repository is maintained through Jest snapshots in `src/__tests__/responseShapes.test.ts`, covering API response envelopes (simulation success/error, restoration required, batch simulation, footprint diff, decode, fee estimation, health, and network status) as well as the parsed `openapi.yaml` specification. When an endpoint response shape or OpenAPI schema intentionally changes, refresh the snapshots with:
 
 ```bash
 pnpm test --updateSnapshot
@@ -114,7 +129,7 @@ pnpm test
 ```bash
 pnpm run test:coverage
 ```
-This generates a coverage report showing which lines of code are tested. Aim for high coverage on critical services like `feeEstimator.ts`, `footprintExtractor.ts`, and `simulator.ts`.
+This generates a coverage report showing which lines of code are tested and enforces the repository's minimum coverage thresholds (`85%` branches, `90%` functions, `90%` lines, `90%` statements). CI will fail if coverage drops below these thresholds. Aim for high coverage on critical services like `feeEstimator.ts`, `footprintExtractor.ts`, and `simulator.ts`.
 
 **Run a single test file:**
 ```bash
@@ -158,6 +173,18 @@ docker compose -f docker-compose.test.yml down
 - `NETWORK_PASSPHRASE` — The network where contracts are deployed (e.g., `Test SDF Network ; September 2015`)
 
 These are used by tests in `src/__tests__/integration.test.ts` and `src/__tests__/simulate.integration.test.ts` to verify real API interactions.
+
+### Mutation Testing (Stryker)
+
+Line coverage does not guarantee assertion strength. We use [Stryker](https://stryker-mutator.io/) (`stryker.config.json`) to mutate conditionals, operators, and return values in `src/services/footprintParser.ts` and `src/services/optimizer.ts`:
+
+```bash
+pnpm run test:mutation
+```
+
+- **Thresholds** (`stryker.config.json`): `high: 80`, `low: 60`, `break: 50`.
+- **Reports**: Generated in `reports/mutation/html/index.html` and printed to the terminal (`clear-text`).
+- **Surviving mutants**: Inspect the HTML report for `Survived` mutants and tighten test assertions in `src/services/tests/footprintParser.test.ts` or `src/services/tests/optimizer.test.ts`.
 
 ### Unit Testing and Mocking
 
@@ -216,6 +243,20 @@ Branch names must follow one of these patterns:
 
 - Protected: `main`, `develop`, `live`
 - Prefixed: `feature/`, `fix/`, `refactor/`, `hotfix/`, `release/`, `chore/`, `docs/`
+
+### Pre-push Hooks
+
+Husky runs fast verification checks before `git push` to prevent broken builds from reaching GitHub:
+
+- **Protected branch checks**: Restricts direct, delete, and force pushes to `main`
+- **TypeScript typecheck**: `pnpm run typecheck`
+- **Fast unit tests**: `pnpm test -- --testPathPattern='unit' --bail --passWithNoTests`
+
+If you need to bypass the pre-push hook in an urgent situation, use:
+
+```bash
+git push --no-verify
+```
 
 ---
 

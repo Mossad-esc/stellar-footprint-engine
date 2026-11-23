@@ -1,10 +1,47 @@
 import { ErrorCode } from "./constants";
 
+/**
+ * A single configured API key together with the scopes it grants.
+ * Used by the RBAC-aware API key auth middleware.
+ */
+export interface ScopedApiKey {
+  /** The raw API key value presented by the client. */
+  key: string;
+  /** Granular permissions granted to this key (e.g. "simulate:read", "admin:cache"). */
+  scopes: string[];
+}
+
+/**
+ * Scopes that can be granted to an API key.
+ */
+export type ApiKeyScope =
+  | "simulate:read"
+  | "simulate:batch"
+  | "admin:cache"
+  | "admin:metrics";
+
 export interface ResponseEnvelope<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
   code?: ErrorCode;
+}
+
+/**
+ * RFC 7807 Problem Details for HTTP APIs
+ * @see https://www.rfc-editor.org/rfc/rfc7807
+ */
+export interface ProblemDetails {
+  /** URI reference identifying the problem type (links to documentation). */
+  type: string;
+  /** Short human-readable summary of the problem type. */
+  title: string;
+  /** HTTP status code. */
+  status: number;
+  /** Human-readable explanation specific to this occurrence. */
+  detail: string;
+  /** URI reference identifying the specific occurrence (request path). */
+  instance: string;
 }
 
 export interface FootprintStats {
@@ -23,10 +60,7 @@ export interface FootprintStats {
 }
 
 export type StorageCategory =
-  | "contractCode"
-  | "contractInstance"
-  | "persistentData"
-  | "temporaryData";
+  "contractCode" | "contractInstance" | "persistentData" | "temporaryData";
 
 export interface StorageStats {
   count: number;
@@ -89,13 +123,20 @@ export interface AuthorizationInvocation {
   subInvocations: AuthorizationInvocation[];
 }
 
+export interface SignerWeight {
+  /** Ed25519 public key (G...) of a supplied signer. */
+  publicKey: string;
+  /** Weight from the account entry; null when account data is unavailable. */
+  weight: number | null;
+}
+
 export interface SignerThresholdReport {
   /** Reports are per tree, so signatures for different payloads cannot be combined. */
   invocationXdr: string;
   accountId: string;
   authorizationLevel: AuthorizationLevel;
   /** Each supplied signer appears once. Missing account data means unknown weight. */
-  signers: { publicKey: string; weight: number | null }[];
+  signers: SignerWeight[];
   thresholdRequired: number | null;
   totalWeight: number | null;
   /** Weight comparison only; custom contract authorization cannot be checked locally. */
@@ -130,4 +171,104 @@ export interface TtlExtensionRecommendation {
   extendTo: number;
   entries: string[];
   restoreFirst: boolean;
+}
+
+export type Network = "mainnet" | "testnet" | "futurenet";
+
+export type XdrType = "transaction" | "operation" | "ledger_key" | "auth_entry";
+
+export type FeeOperationType = "invoke" | "restore" | "extend";
+
+export interface FootprintInput {
+  readOnly: string[];
+  readWrite: string[];
+}
+
+export interface FootprintDiffResult {
+  added: FootprintInput;
+  removed: FootprintInput;
+  unchanged: FootprintInput;
+}
+
+export interface FeeEstimate {
+  baseFee: string;
+  resourceFee: string;
+  totalFee: string;
+  feeInXLM: string;
+  operationType?: FeeOperationType;
+  breakdown?: {
+    baseFee: string;
+    writeFee: string;
+    refundableFee: string;
+    otherResourceFee: string;
+  };
+}
+
+export interface DecodeResult {
+  success: boolean;
+  type: XdrType;
+  decoded?: unknown;
+  error?: string;
+}
+
+export interface SimulationCost {
+  cpuInsns: string;
+  memBytes: string;
+  ttlExtension?: TtlExtensionRecommendation;
+}
+
+export interface SimulationEnvelope {
+  success: boolean;
+  simulatedAt?: string;
+  upgradedFromV0?: boolean;
+  footprint?: {
+    readOnly: unknown[];
+    readWrite: unknown[];
+    breakdown?: FootprintBreakdown;
+  };
+  contracts?: string[];
+  contractType?: ContractType;
+  isSAC?: boolean;
+  assetInfo?: AssetInfo;
+  sacContracts?: SacContract[];
+  ttl?: Record<string, TtlInfo>;
+  ttlWarnings?: string[];
+  optimized?: boolean;
+  rawFootprint?: FootprintInput;
+  footprintStats?: FootprintStats;
+  invocation?: ContractInvocation;
+  authEntries?: AuthEntry[];
+  events?: ContractEvent[];
+  cost?: SimulationCost;
+  resourceFee?: string;
+  error?: string;
+  code?: ErrorCode;
+  contractId?: string;
+  requiredSigners?: string[];
+  threshold?: number;
+  signerThresholdReports?: SignerThresholdReport[];
+  operations?: SimulationEnvelope[];
+  feeBump?: boolean;
+  diagnosticEvents?: string[];
+  cacheHit?: boolean;
+  type?: string;
+  warnings?: string[];
+}
+
+export interface BatchSimulationItem extends SimulationEnvelope {
+  index: number;
+}
+
+export interface BatchSimulationResponse {
+  results: BatchSimulationItem[];
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      /** Scopes granted to the authenticated API key, attached by apiKeyAuth. */
+      apiKeyScopes?: string[];
+    }
+  }
 }

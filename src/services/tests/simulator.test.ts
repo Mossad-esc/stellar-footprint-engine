@@ -9,6 +9,10 @@ import {
   FEE_BUMP_XDR,
   INVALID_BASE64_XDR,
 } from "../../tests/fixtures/xdr";
+import {
+  buildMockTransaction,
+  mockTransaction,
+} from "../../tests/factories/transactionFactory";
 import * as footprintParser from "../footprintParser";
 import { simulateTransaction, simulateDryRun, simulateDependentBatch } from "../simulator";
 
@@ -338,6 +342,8 @@ const payer = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 4));
 const cosigner = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 5));
 const recipient = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 6));
 const contract = StellarSdk.Address.contract(Buffer.alloc(32, 7)).toString();
+const cosigner2 = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 8));
+const cosigner3 = StellarSdk.Keypair.fromRawEd25519Seed(Buffer.alloc(32, 9));
 const addr = (key: StellarSdk.Keypair) =>
   new StellarSdk.Address(key.publicKey()).toScVal();
 const i128 = (value = 123456789012345678901234567890n) =>
@@ -404,19 +410,9 @@ function transaction(
   args = transferArgs,
   auth: StellarSdk.xdr.SorobanAuthorizationEntry[] = [],
 ): StellarSdk.Transaction {
-  return new StellarSdk.TransactionBuilder(
-    new StellarSdk.Account(payer.publicKey(), "1"),
-    { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
-  )
-    .addOperation(
-      StellarSdk.Operation.invokeHostFunction({
-        func: StellarSdk.xdr.HostFunction.hostFunctionTypeInvokeContract(
-          invocation(functionName, args),
-        ),
-        auth,
-      }),
-    )
-    .setTimeout(0)
+  return mockTransaction({ sourceAccount: payer })
+    .withContractCall(contract, functionName, args)
+    .withAuth(auth)
     .build();
 }
 function accountData(
@@ -470,6 +466,60 @@ function accountState(
   };
 }
 
+function multiSigAccountData(
+  account = payer,
+  thresholds = [0, 1, 2, 3],
+  signers: { key: StellarSdk.Keypair; weight: number }[] = [],
+): StellarSdk.xdr.LedgerEntryData {
+  return StellarSdk.xdr.LedgerEntryData.account(
+    new StellarSdk.xdr.AccountEntry({
+      accountId: StellarSdk.xdr.PublicKey.publicKeyTypeEd25519(
+        account.rawPublicKey(),
+      ),
+      balance: 10000000n,
+      seqNum: 1n,
+      numSubEntries: signers.length,
+      inflationDest: null,
+      flags: 0,
+      homeDomain: "",
+      thresholds: Buffer.from(thresholds),
+      signers: signers.map(
+        ({ key, weight }) =>
+          new StellarSdk.xdr.Signer({
+            key: StellarSdk.xdr.SignerKey.signerKeyTypeEd25519(
+              key.rawPublicKey(),
+            ),
+            weight,
+          }),
+      ),
+      ext: StellarSdk.xdr.AccountEntryExt.v0(),
+    }),
+  );
+}
+
+function multiSigAccountState(
+  account = payer,
+  thresholds = [0, 1, 2, 3],
+  signers: { key: StellarSdk.Keypair; weight: number }[] = [],
+): StellarSdk.rpc.Api.LedgerEntryChange {
+  return {
+    type: 2,
+    key: StellarSdk.xdr.LedgerKey.account(
+      new StellarSdk.xdr.LedgerKeyAccount({
+        accountId: StellarSdk.xdr.PublicKey.publicKeyTypeEd25519(
+          account.rawPublicKey(),
+        ),
+      }),
+    ),
+    before: new StellarSdk.xdr.LedgerEntry({
+      lastModifiedLedgerSeq: 100,
+      data: multiSigAccountData(account, thresholds, signers),
+      ext: StellarSdk.xdr.LedgerEntryExt.v0(),
+    }),
+    after: null,
+  };
+}
+
 describe("static dry run", () => {
   it.each([
     ["transfer", transferArgs],
@@ -511,15 +561,12 @@ describe("static dry run", () => {
       latestLedger: 101,
     });
     expect(simulateDryRun(FEE_BUMP_XDR).operations[0].type).toBe("payment");
-    const upload = new StellarSdk.TransactionBuilder(
-      new StellarSdk.Account(payer.publicKey(), "1"),
-      { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
-    )
-      .addOperation(
+    const upload = buildMockTransaction({
+      sourceAccount: payer,
+      operations: [
         StellarSdk.Operation.uploadContractWasm({ wasm: Buffer.from("wasm") }),
-      )
-      .setTimeout(0)
-      .build();
+      ],
+    });
     expect(
       simulateDryRun(upload.toXDR()).operations[0].invocation,
     ).toBeUndefined();
@@ -818,55 +865,179 @@ describe("static dry run", () => {
   });
 });
 
-describe("simulateDependentBatch", () => {
-  it("executes independent transactions in a single tier", async () => {
-    mockSimulate.mockResolvedValue(success());
-    const result = await simulateDependentBatch(
-      [
-        { xdr: SOROBAN_INVOKE_XDR },
-        { xdr: SOROBAN_INVOKE_XDR },
-      ],
-      "testnet",
-    );
-    expect(result.success).toBe(true);
-    expect(result.executionTrace).toHaveLength(1);
-    expect(result.executionTrace[0].indices).toEqual([0, 1]);
-    expect(result.results).toHaveLength(2);
+describe("multi-sig and threshold authorization", () => {
+  it("extracts all authorizers into requiredSigners without duplicates", async () => {
+    const auth = [
+      authorization(tree(), [payer], payer),
+      authorization(tree("balance", [], [addr(payer)]), [cosigner], cosigner),
+      authorization(
+        tree(
+          "approve",
+          [],
+          [addr(payer), addr(recipient), i128(), StellarSdk.xdr.ScVal.scvU32(1000)],
+        ),
+        [payer],
+        payer,
+      ),
+    ];
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      stateChanges: [accountState()],
+      result: { auth, retval: StellarSdk.xdr.ScVal.scvVoid() },
+    });
+    const result = await simulateTransaction(transaction().toXDR());
+    expect(result.requiredSigners).toEqual([
+      payer.publicKey(),
+      cosigner.publicKey(),
+    ]);
+    expect(result.threshold).toBe(2);
+    expect(result.authEntries).toHaveLength(3);
   });
 
-  it("executes dependent transactions in separate sequential tiers", async () => {
-    mockSimulate.mockResolvedValue(success());
-    const result = await simulateDependentBatch(
-      [
-        { xdr: SOROBAN_INVOKE_XDR },
-        { xdr: SOROBAN_INVOKE_XDR, dependsOn: [0] },
-      ],
-      "testnet",
+  it("handles account with multiple Ed25519 signer entries (2-of-3 threshold)", async () => {
+    const signers = [
+      { key: cosigner, weight: 1 },
+      { key: cosigner2, weight: 1 },
+      { key: cosigner3, weight: 1 },
+    ];
+    const auth = authorization(tree(), [cosigner, cosigner2, cosigner3]);
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      stateChanges: [multiSigAccountState(payer, [0, 1, 2, 3], signers)],
+      result: { auth, retval: StellarSdk.xdr.ScVal.scvVoid() },
+    });
+    const result = await simulateTransaction(transaction().toXDR());
+    const report = result.signerThresholdReports?.[0];
+    expect(report).toMatchObject({
+      accountId: payer.publicKey(),
+      authorizationLevel: "payment",
+      thresholdRequired: 2,
+      totalWeight: 3,
+      isSufficient: true,
+    });
+    expect(report.signers).toHaveLength(3);
+    expect(report.signers.map((s) => s.publicKey)).toEqual(
+      expect.arrayContaining([
+        cosigner.publicKey(),
+        cosigner2.publicKey(),
+        cosigner3.publicKey(),
+      ]),
     );
-    expect(result.success).toBe(true);
-    expect(result.executionTrace).toHaveLength(2);
-    expect(result.executionTrace[0].indices).toEqual([0]);
-    expect(result.executionTrace[1].indices).toEqual([1]);
   });
 
-  it("returns 400-style error for circular dependencies", async () => {
-    const result = await simulateDependentBatch(
-      [
-        { xdr: SOROBAN_INVOKE_XDR, dependsOn: [1] },
-        { xdr: SOROBAN_INVOKE_XDR, dependsOn: [0] },
-      ],
-      "testnet",
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/circular dependency/i);
+  it("is insufficient when fewer than threshold signers are supplied", async () => {
+    const signers = [
+      { key: cosigner, weight: 1 },
+      { key: cosigner2, weight: 1 },
+      { key: cosigner3, weight: 1 },
+    ];
+    const auth = authorization(tree(), [cosigner]);
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      stateChanges: [multiSigAccountState(payer, [0, 1, 2, 3], signers)],
+      result: { auth, retval: StellarSdk.xdr.ScVal.scvVoid() },
+    });
+    const result = await simulateTransaction(transaction().toXDR());
+    expect(result.signerThresholdReports?.[0]).toMatchObject({
+      thresholdRequired: 2,
+      totalWeight: 1,
+      isSufficient: false,
+    });
   });
 
-  it("returns error for out-of-range dependency index", async () => {
-    const result = await simulateDependentBatch(
-      [{ xdr: SOROBAN_INVOKE_XDR, dependsOn: [5] }],
-      "testnet",
+  it("handles contract auth with nested sub-contract invocations", async () => {
+    const nestedTree = tree("transfer", [
+      tree("mint", [], [addr(payer), i128()]),
+      tree(
+        "approve",
+        [],
+        [addr(payer), addr(recipient), i128(), StellarSdk.xdr.ScVal.scvU32(1000)],
+      ),
+    ]);
+    const auth = authorization(nestedTree, [payer, cosigner]);
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      stateChanges: [accountState()],
+      result: { auth, retval: StellarSdk.xdr.ScVal.scvVoid() },
+    });
+    const result = await simulateTransaction(transaction().toXDR());
+    expect(result.authEntries?.[0].invocationTree).toMatchObject({
+      authorizationLevel: "admin",
+      subInvocations: expect.arrayContaining([
+        expect.objectContaining({
+          authorizationLevel: "admin",
+          invocation: expect.objectContaining({ functionName: "mint" }),
+        }),
+        expect.objectContaining({
+          authorizationLevel: "payment",
+          invocation: expect.objectContaining({ functionName: "approve" }),
+        }),
+      ]),
+    });
+    expect(result.signerThresholdReports?.[0]).toMatchObject({
+      authorizationLevel: "admin",
+      thresholdRequired: 3,
+      totalWeight: 2,
+      isSufficient: false,
+    });
+  });
+
+  it("handles mixed address and account credentials with distinct authorizers", async () => {
+    const addressAuth = authorization(tree(), [payer, cosigner], payer);
+    const sourceAuth = new StellarSdk.xdr.SorobanAuthorizationEntry({
+      credentials:
+        StellarSdk.xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+      rootInvocation: tree("balance", [], [addr(payer)]),
+    });
+    // Set the operation source to cosigner so the source-account credential
+    // resolves to cosigner (not the default payer), creating a distinct
+    // authorizer from the address-credential entry.
+    const tx = new StellarSdk.TransactionBuilder(
+      new StellarSdk.Account(payer.publicKey(), "1"),
+      { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
+    )
+      .addOperation(
+        StellarSdk.Operation.invokeHostFunction({
+          func: StellarSdk.xdr.HostFunction.hostFunctionTypeInvokeContract(
+            invocation("transfer", transferArgs),
+          ),
+          auth: [addressAuth, sourceAuth],
+          source: cosigner.publicKey(),
+        }),
+      )
+      .setTimeout(0)
+      .build();
+    tx.sign(payer, cosigner);
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      stateChanges: [accountState(), accountState(cosigner)],
+      result: { auth: [addressAuth, sourceAuth], retval: StellarSdk.xdr.ScVal.scvVoid() },
+    });
+    const result = await simulateTransaction(tx.toXDR());
+    expect(result.requiredSigners).toEqual([
+      payer.publicKey(),
+      cosigner.publicKey(),
+    ]);
+    expect(result.authEntries).toHaveLength(2);
+    expect(result.authEntries?.[0].credentialsType).toBe(
+      "sorobanCredentialsAddress",
     );
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/out-of-range/i);
+    expect(result.authEntries?.[1].credentialsType).toBe(
+      "sorobanCredentialsSourceAccount",
+    );
+    expect(result.signerThresholdReports).toHaveLength(2);
+  });
+
+  it("deduplicates identical auth entries in requiredSigners", async () => {
+    const auth = authorization(tree(), [payer, cosigner]);
+    mockSimulate.mockResolvedValue({
+      ...success(),
+      stateChanges: [accountState()],
+      result: { auth: [auth, auth], retval: StellarSdk.xdr.ScVal.scvVoid() },
+    });
+    const result = await simulateTransaction(transaction().toXDR());
+    expect(result.requiredSigners).toEqual([payer.publicKey()]);
+    expect(result.authEntries).toHaveLength(1);
+    expect(result.threshold).toBe(1);
   });
 });

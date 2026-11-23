@@ -4,6 +4,20 @@ import { Request, Response, NextFunction } from "express";
 
 import { ErrorCode, HTTP_STATUS } from "../constants";
 
+export interface ScopedApiKey {
+  key: string;
+  scopes: string[];
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      apiKeyScopes?: string[];
+    }
+  }
+}
+
 function sha256(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
 }
@@ -25,18 +39,83 @@ function extractApiKey(req: Request): string | null {
   return null;
 }
 
-function isKeyValid(candidate: string, configuredKeys: string[]): boolean {
+function findMatchingKey(
+  candidate: string,
+  configuredKeys: ScopedApiKey[],
+): ScopedApiKey | null {
   const candidateDigest = sha256(candidate);
-  let matched = false;
+  let matched: ScopedApiKey | null = null;
 
-  for (const key of configuredKeys) {
-    const keyDigest = sha256(key);
+  for (const entry of configuredKeys) {
+    const keyDigest = sha256(entry.key);
     if (timingSafeEqual(candidateDigest, keyDigest)) {
-      matched = true;
+      matched = entry;
     }
   }
 
   return matched;
+}
+
+/**
+ * Resolve the configured scoped API keys.
+ * Prefers API_KEYS_CONFIG (JSON map of key -> scopes array, or array of
+ * { key, scopes } objects). Falls back to legacy comma-separated API_KEYS,
+ * whose keys are granted the wildcard scope "*".
+ */
+export function resolveConfiguredKeys(): ScopedApiKey[] {
+  const rawConfig = process.env.API_KEYS_CONFIG;
+  if (rawConfig && rawConfig.trim() !== "") {
+    try {
+      const parsed: unknown = JSON.parse(rawConfig);
+      const entries: ScopedApiKey[] = [];
+
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (
+            item &&
+            typeof item === "object" &&
+            typeof (item as { key?: unknown }).key === "string"
+          ) {
+            const scopes = (item as { scopes?: unknown }).scopes;
+            entries.push({
+              key: (item as { key: string }).key,
+              scopes: Array.isArray(scopes)
+                ? scopes.filter((s): s is string => typeof s === "string")
+                : [],
+            });
+          }
+        }
+      } else if (parsed && typeof parsed === "object") {
+        for (const [key, scopes] of Object.entries(
+          parsed as Record<string, unknown>,
+        )) {
+          entries.push({
+            key,
+            scopes: Array.isArray(scopes)
+              ? scopes.filter((s): s is string => typeof s === "string")
+              : [],
+          });
+        }
+      }
+
+      if (entries.length > 0) {
+        return entries;
+      }
+    } catch {
+      // Fall through to legacy API_KEYS on malformed config
+    }
+  }
+
+  const rawKeys = process.env.API_KEYS;
+  if (!rawKeys || rawKeys.trim() === "") {
+    return [];
+  }
+
+  return rawKeys
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean)
+    .map((key) => ({ key, scopes: ["*"] }));
 }
 
 /**
@@ -50,18 +129,9 @@ export function apiKeyAuth(
   res: Response,
   next: NextFunction,
 ): void {
-  const rawKeys = process.env.API_KEYS;
+  const validKeys = resolveConfiguredKeys();
 
-  // If no API_KEYS configured, auth is disabled — allow all requests
-  if (!rawKeys || rawKeys.trim() === "") {
-    return next();
-  }
-
-  const validKeys = rawKeys
-    .split(",")
-    .map((k) => k.trim())
-    .filter(Boolean);
-
+  // If no keys configured, auth is disabled — allow all requests
   if (validKeys.length === 0) {
     return next();
   }
@@ -72,7 +142,9 @@ export function apiKeyAuth(
   }
 
   const token = extractApiKey(req);
-  if (!token || !isKeyValid(token, validKeys)) {
+  const matched = token ? findMatchingKey(token, validKeys) : null;
+
+  if (!matched) {
     res.setHeader("WWW-Authenticate", "Bearer");
     res.status(HTTP_STATUS.UNAUTHORIZED).json({
       success: false,
@@ -82,5 +154,33 @@ export function apiKeyAuth(
     return;
   }
 
+  req.apiKeyScopes = matched.scopes;
   next();
+}
+
+/**
+ * Middleware factory enforcing that the authenticated API key carries the
+ * required scope. Must run after `apiKeyAuth`.
+ * Returns 403 Forbidden with a descriptive envelope when the scope is missing.
+ */
+export function requireScope(scope: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const scopes = req.apiKeyScopes;
+
+    // Auth disabled (no keys configured) — allow through
+    if (!scopes) {
+      return next();
+    }
+
+    if (scopes.includes("*") || scopes.includes(scope)) {
+      return next();
+    }
+
+    res.status(HTTP_STATUS.FORBIDDEN).json({
+      success: false,
+      error: `Forbidden: API key lacks required scope '${scope}'`,
+      code: ErrorCode.FORBIDDEN,
+      requiredScope: scope,
+    });
+  };
 }

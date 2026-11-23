@@ -3,6 +3,11 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+// Initialize OpenTelemetry before Express and other instrumented modules load
+// eslint-disable-next-line import-x/order
+import { initTracing, shutdownTracing } from "./tracing";
+initTracing();
+
 const _startupBegin = process.hrtime.bigint();
 
 import path from "path";
@@ -15,9 +20,12 @@ import type { Request, Response, NextFunction } from "express";
 import helmet from "helmet";
 
 import routes from "./api/routes";
+import { attachWsGateway } from "./api/wsGateway";
+import { env } from "./config/env";
 import { apiKeyAuth } from "./middleware/apiKeyAuth";
 import { bruteForceMiddleware } from "./middleware/bruteForce";
 import { contentTypeMiddleware } from "./middleware/contentType";
+import { closeCounterStore } from "./middleware/counterStore";
 import { errorHandler } from "./middleware/errorHandler";
 import { httpCacheMiddleware } from "./middleware/httpCache";
 import { ipFilterMiddleware } from "./middleware/ipFilter";
@@ -26,6 +34,7 @@ import { requestIdMiddleware } from "./middleware/requestId";
 import { requestLogger } from "./middleware/requestLogger";
 import { responseTimeMiddleware } from "./middleware/responseTime";
 import { timeoutMiddleware } from "./middleware/timeout";
+import { closeCache } from "./services/cache";
 import { logger } from "./utils/logger";
 
 const app = express();
@@ -35,16 +44,106 @@ const COMPRESSION_THRESHOLD = parseInt(
   10,
 );
 
-function buildCorsOptions(): cors.CorsOptions {
-  const origin = process.env.CORS_ORIGIN;
-  if (!origin) {
-    return process.env.NODE_ENV === "production"
-      ? { origin: false }
-      : { origin: "*" };
-  }
-  const allowed = origin.split(",").map((o) => o.trim());
-  return { origin: allowed.length === 1 ? allowed[0] : allowed };
+const CORS_MAX_AGE_SECONDS = 86400;
+
+/**
+ * Convert an approved wildcard pattern (e.g. `*.stellar.org`) into an exact
+ * host regex. Only a single leading `*.` label is supported so that patterns
+ * cannot be abused to match arbitrary hosts (e.g. `*.stellar.org.evil.com`).
+ */
+function wildcardToRegex(pattern: string): RegExp | null {
+  const trimmed = pattern.trim().toLowerCase();
+  if (!trimmed.startsWith("*.")) return null;
+  const suffix = trimmed.slice(2);
+  if (!suffix || suffix.includes("*")) return null;
+  const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match `https://<subdomain>.<suffix>` with an optional port and no path.
+  return new RegExp(`^https?:\\/\\/([a-z0-9-]+\\.)+${escaped}(:\\d+)?$`, "i");
 }
+
+function buildCorsOptions(): cors.CorsOptions {
+  const allowedOrigins = env.CORS_ALLOWED_ORIGINS;
+  const allowCredentials = env.CORS_ALLOW_CREDENTIALS;
+  const allowAuthorizationHeader = env.CORS_ALLOW_AUTHORIZATION_HEADER;
+
+  const exactOrigins = new Set<string>();
+  const wildcardPatterns: RegExp[] = [];
+
+  for (const entry of allowedOrigins) {
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized) continue;
+    if (normalized === "*") {
+      // Wildcard `*` is unsafe when credentials or authorization headers are
+      // permitted; ignore it in that case rather than silently allowing all.
+      if (allowCredentials || allowAuthorizationHeader) continue;
+      exactOrigins.add("*");
+      continue;
+    }
+    const regex = wildcardToRegex(normalized);
+    if (regex) {
+      wildcardPatterns.push(regex);
+    } else {
+      exactOrigins.add(normalized.replace(/\/$/, ""));
+    }
+  }
+
+  const allowAll = exactOrigins.has("*");
+
+  const originValidator: cors.CorsOptions["origin"] = (
+    requestOrigin,
+    callback,
+  ) => {
+    // Requests without an Origin header (same-origin, curl, server-to-server)
+    // are not subject to CORS and are allowed through.
+    if (!requestOrigin) {
+      callback(null, true);
+      return;
+    }
+
+    if (allowAll) {
+      callback(null, true);
+      return;
+    }
+
+    const normalized = requestOrigin.trim().toLowerCase().replace(/\/$/, "");
+
+    if (exactOrigins.has(normalized)) {
+      callback(null, true);
+      return;
+    }
+
+    if (wildcardPatterns.some((regex) => regex.test(normalized))) {
+      callback(null, true);
+      return;
+    }
+
+    callback(null, false);
+  };
+
+  return {
+    origin: originValidator,
+    credentials: allowCredentials,
+    maxAge: CORS_MAX_AGE_SECONDS,
+    allowedHeaders: allowAuthorizationHeader
+      ? ["Content-Type", "Authorization", "X-API-Key", "X-Request-Id"]
+      : ["Content-Type", "X-API-Key", "X-Request-Id"],
+    optionsSuccessStatus: 204,
+  };
+}
+
+// Ensure caches key on Origin so responses are not shared across origins.
+app.use((req, res, next) => {
+  const existing = res.getHeader("Vary");
+  const varyValues = new Set(
+    (Array.isArray(existing) ? existing : existing ? [String(existing)] : [])
+      .flatMap((v) => String(v).split(","))
+      .map((v) => v.trim())
+      .filter(Boolean),
+  );
+  varyValues.add("Origin");
+  res.setHeader("Vary", Array.from(varyValues).join(", "));
+  next();
+});
 
 app.use(cors(buildCorsOptions()));
 app.use(
@@ -206,7 +305,26 @@ function brotliMiddleware(
 
 app.use(brotliMiddleware);
 app.use(compression({ threshold: COMPRESSION_THRESHOLD }));
-app.use(express.json({ limit: process.env.BODY_LIMIT || "100kb" }));
+
+// Route-specific body parsers: batch endpoints accept larger payloads (2MB)
+// while all other routes are capped at 250kb to prevent memory-based DoS.
+// The batch parser must be registered before the general parser so the larger
+// limit only applies to batch endpoints.
+const BATCH_BODY_LIMIT = "2mb";
+const DEFAULT_BODY_LIMIT = "250kb";
+
+const batchJsonParser = express.json({ limit: BATCH_BODY_LIMIT });
+const defaultJsonParser = express.json({ limit: DEFAULT_BODY_LIMIT });
+
+const BATCH_ROUTE_PATTERN = /^\/api\/v1\/(simulate\/batch|batch)(\/|$)/i;
+
+app.use((req, res, next) => {
+  if (BATCH_ROUTE_PATTERN.test(req.path)) {
+    batchJsonParser(req, res, next);
+    return;
+  }
+  defaultJsonParser(req, res, next);
+});
 app.use(responseTimeMiddleware);
 app.use(ipFilterMiddleware);
 app.use(requestIdMiddleware);
@@ -217,44 +335,67 @@ app.use(bruteForceMiddleware);
 app.use(contentTypeMiddleware);
 app.use(httpCacheMiddleware);
 
-// Swagger UI — development only
+// Interactive API Playground (Scalar UI) & Swagger UI — development only
 if (process.env.NODE_ENV !== "production") {
-  const swaggerUi =
-    require("swagger-ui-express") as typeof import("swagger-ui-express");
-
   const YAML = require("yaml") as { parse: (s: string) => unknown };
-
   const fs = require("fs") as typeof import("fs");
   const specPath = path.join(__dirname, "..", "openapi.yaml");
+
   if (fs.existsSync(specPath)) {
     const spec = YAML.parse(fs.readFileSync(specPath, "utf8")) as Record<
       string,
       unknown
     >;
-    const swaggerSetup = swaggerUi.setup(spec, {
-      customSiteTitle: "Stellar Footprint Service API",
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (app as any).use("/api-docs", swaggerUi.serve, swaggerSetup);
 
-    // Scalar UI at /docs (#30)
-    try {
-      const { apiReference } =
-        require("@scalar/express-api-reference") as typeof import("@scalar/express-api-reference");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (app as any).use(
-        "/docs",
-        apiReference({
-          spec: { content: spec },
-          theme: "default",
-          darkMode: true,
-          defaultHttpClient: { targetKey: "node", clientKey: "undici" },
-          authentication: { preferredSecurityScheme: "ApiKeyAuth" },
-        }),
+    const { apiReference } =
+      require("@scalar/express-api-reference") as typeof import("@scalar/express-api-reference");
+
+    // Relax CSP for the interactive API playground so Scalar assets and Testnet
+    // "Try It" requests work in non-production environments.
+    const docsCspMiddleware: express.RequestHandler = (_req, res, next) => {
+      res.setHeader(
+        "Content-Security-Policy",
+        [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+          "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
+          "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+          "img-src 'self' data: https:",
+          "connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://soroban-rpc.mainnet.stellar.gateway.fm",
+        ].join("; "),
       );
-    } catch {
-      // @scalar/express-api-reference not installed — skip
-    }
+      next();
+    };
+
+    const scalarHandler = apiReference({
+      spec: { content: spec },
+      theme: "purple",
+      layout: "modern",
+      showSidebar: true,
+      defaultHttpClient: {
+        targetKey: "js",
+        clientKey: "fetch",
+      },
+      hiddenClients: [],
+      authentication: {
+        preferredSecurityScheme: "ApiKeyHeader",
+        apiKey: {
+          token: process.env.API_KEY || "testnet-demo-key",
+        },
+      },
+      metaData: {
+        title: "Stellar Footprint Service — Interactive API Playground",
+      },
+      customCss: `
+        @media (max-width: 768px) {
+          .scalar-api-reference { font-size: 14px; }
+          .scalar-card, pre, code { max-width: 100%; overflow-x: auto; }
+        }
+      `,
+    });
+
+    app.use("/api/docs", docsCspMiddleware, scalarHandler);
+    app.use("/api/reference", docsCspMiddleware, scalarHandler);
   }
 }
 
@@ -301,21 +442,45 @@ if (require.main === module) {
       },
       "stellar-footprint-service started",
     );
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
   });
+
+  // Attach WebSocket gateway on /ws (gracefully skipped if `ws` is not installed).
+  const teardownWs = attachWsGateway(server);
 
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.headersTimeout = HEADERS_TIMEOUT_MS;
 
+  let isShuttingDown = false;
+
   const shutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     logger.info(`${signal} received, shutting down gracefully`);
-    server.close(() => {
-      logger.info("Server closed, exiting");
-      process.exit(0);
-    });
-    setTimeout(() => {
-      logger.warn("Forced exit after timeout");
+
+    const forceExitTimer = setTimeout(() => {
+      logger.warn("Forced exit after 10s shutdown timeout");
       process.exit(1);
-    }, 10_000).unref();
+    }, 10_000);
+    forceExitTimer.unref();
+
+    server.close(async (err) => {
+      clearTimeout(forceExitTimer);
+      if (err) {
+        logger.error({ err }, "Error closing HTTP server");
+      }
+
+      try {
+        await Promise.allSettled([closeCache(), closeCounterStore()]);
+        logger.info("Redis connections closed, exiting");
+      } catch (cleanupErr) {
+        logger.error({ err: cleanupErr }, "Error during shutdown cleanup");
+      }
+
+      process.exit(err ? 1 : 0);
+    });
   };
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));

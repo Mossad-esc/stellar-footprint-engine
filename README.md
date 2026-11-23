@@ -109,6 +109,65 @@ cp .env.example .env
 # Edit .env with your RPC URLs and keys
 ```
 
+## 🖥️ CLI Tool (`sfe`)
+
+A command-line tool is bundled with the service for quick terminal-based inspection without writing cURL commands or custom scripts.
+
+### Install globally
+
+```bash
+# After building the project
+npm run build
+npm link        # adds `sfe` to your PATH, or
+npx sfe --help
+```
+
+### Configuration
+
+| Env variable  | Default                  | Description                           |
+|---------------|--------------------------|---------------------------------------|
+| `SFE_BASE_URL` | `http://localhost:3000` | URL of the running service            |
+| `SFE_API_KEY`  | *(none)*                | API key forwarded as `x-api-key`      |
+| `SFE_NETWORK`  | `testnet`               | Default network when `--network` is omitted |
+
+### Commands
+
+#### `sfe simulate <xdr>`
+
+Simulate a Soroban transaction XDR and display footprint, cost, and contracts.
+
+```
+sfe simulate <xdr> [--network testnet|mainnet|futurenet] [--json]
+```
+
+#### `sfe diff <xdr1> <xdr2>`
+
+Compare the footprints of two transaction XDRs side-by-side.
+
+```
+sfe diff <xdr1> <xdr2> [--network testnet] [--json]
+```
+
+#### `sfe decode <xdr>`
+
+Decode an XDR string into human-readable JSON without an RPC call.
+
+```
+sfe decode <xdr> [--type TransactionEnvelope] [--json]
+```
+
+#### `sfe cost <xdr>`
+
+Simulate a transaction and render a human-readable fee summary in XLM and stroops.
+
+```
+sfe cost <xdr> [--network testnet] [--json]
+```
+
+All commands support `--json` to emit raw JSON — useful for piping into `jq`.
+
+---
+
 ## Load Testing
 
 To benchmark the service under concurrent load:
@@ -535,7 +594,18 @@ npm run build:clean    # Clean then rebuild from source
 
 ## 📡 API Reference
 
-You can also test the API using the [Postman collection](./docs/postman/stellar-footprint-service.postman_collection.json). Import this collection into Postman to get started quickly.
+### Interactive API Playground (Scalar UI)
+
+In development mode (`NODE_ENV !== "production"`), an interactive API playground powered by **Scalar** is available at:
+
+- **`http://localhost:3000/api/docs`** (alias: `/api/reference`)
+- **Raw OpenAPI Spec:** `http://localhost:3000/api/v1/openapi.json`
+
+The playground includes:
+- Auto-generated code snippets in **TypeScript / JavaScript**, **Python**, **Go**, and **cURL** for every endpoint
+- Real-world Soroban transaction XDR examples
+- Interactive **Try It** execution with pre-configured Testnet credentials
+- Responsive layout across desktop and mobile viewports
 
 You can also test the API using the [Postman collection](./docs/postman/stellar-footprint-service.postman_collection.json). Import this collection into Postman to get started quickly.
 
@@ -868,6 +938,22 @@ export default router;
 
 ---
 
+## 📚 Documentation & Tutorials
+
+| Guide / Tutorial | Description |
+|---|---|
+| [Understanding Soroban Footprints](./docs/guides/understanding-footprints.md) | Beginner-friendly introduction to Soroban footprints and how this service simplifies them |
+| [Footprint Optimization Patterns](./docs/guides/footprint-optimization.md) | In-depth guide to minimizing Soroban resource fees with 5 concrete contract patterns |
+| [Contributor Onboarding Walkthrough](./docs/contributing/onboarding-walkthrough.md) | Step-by-step guide from cloning the repo to your first merged PR, including setup troubleshooting |
+| [Soroban State Archival & Restoration Lifecycle](./docs/guides/state-archival-and-restoration.md) | Deep dive into TTLs, rent, archival states, and recovering entries via `POST /api/v1/restore` |
+| [Next.js dApp Integration Tutorial](./docs/tutorials/nextjs-dapp-integration.md) | End-to-end React/Next.js tutorial with Freighter Wallet and copy-pasteable `useSorobanSimulation` hook |
+| [Freighter Wallet Integration Guide](./docs/guides/wallet-integration.md) | Wiring up Freighter browser wallet with the simulate → sign → submit flow |
+| [Error Handling Guide](./docs/guides/error-handling.md) | Reference of error codes, HTTP status codes, response shapes, and retry strategies |
+| [Caching Guide](./docs/guides/caching.md) | Redis vs in-memory dual-backend strategy, TTL configuration, and cache invalidation |
+| [Monitoring Guide](./docs/guides/monitoring.md) | Production Prometheus + Grafana setup, metrics, and alerting |
+| [Kubernetes Deployment Guide](./docs/guides/kubernetes.md) | Deploying and scaling the service on Kubernetes |
+| [Architecture Overview](./docs/architecture.md) | Component breakdown and architectural design decisions |
+
 ## 🔍 Understanding Footprints
 
 For a beginner-friendly guide explaining what Soroban footprints are, why they are required, and how this service simplifies the process, see [Understanding Soroban Footprints](./docs/guides/understanding-footprints.md).
@@ -954,7 +1040,7 @@ To report a security vulnerability, please follow our [Security Policy](./SECURI
 
 ### "Transaction requires ledger entry restoration"
 
-**Solution:** Some ledger entries have expired. You need to submit a restoration transaction first before simulating.
+**Solution:** Some ledger entries have expired. Call `POST /api/v1/restore` with your transaction XDR, sign and submit the returned restoration transaction, and then re-simulate. See the [State Archival & Restoration Lifecycle Guide](./docs/guides/state-archival-and-restoration.md) for a step-by-step walkthrough.
 
 ### Simulation returns empty footprint
 
@@ -984,7 +1070,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for a full history of changes.
 
 ## 🤝 Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide covering fork/clone setup, local development, code style, commit format, PR process, and issue labels.
+Contributions are welcome! New contributors can follow the [Contributor Onboarding Walkthrough](./docs/contributing/onboarding-walkthrough.md) for a step-by-step path from clone to first merged PR, or see [CONTRIBUTING.md](./CONTRIBUTING.md) for the full reference covering fork/clone setup, local development, code style, commit format, PR process, and issue labels.
 
 Check out [ISSUES.md](ISSUES.md) for 150+ ideas on where to start.
 
