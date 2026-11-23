@@ -17,7 +17,7 @@ import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
 import { calculateFootprintStats } from "@services/footprintExtractor";
 import { getNetworkStatus, getNetworkLimits } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
-import { getRpcStats } from "@services/rpcClient";
+import { fetchContractTtl } from "@services/rpcClient";
 import {
   simulateTransaction,
   simulateDryRun as analyzeDryRun,
@@ -49,6 +49,17 @@ import {
   getErrorCodeByMessage,
 } from "../constants";
 import { ResponseEnvelope } from "../types";
+import {
+  CostBreakdownQuerySchema,
+  DecodeQuerySchema,
+  SimulateHistoryQuerySchema,
+  NetworkStatusQuerySchema,
+  DecodeBatchBodySchema,
+  ContractTtlParamsSchema,
+  ContractTtlQuerySchema,
+  validateQuery,
+  validateBody,
+} from "./schemas";
 
 export function supportedNetworks(_req: Request, res: Response): void {
   const networks: string[] = [];
@@ -162,12 +173,21 @@ export async function simulate(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { xdr, network, webhookUrl, ledgerSequence } = req.body as {
+  const { xdr, network, webhookUrl, ledgerSequence, dryRun } = req.body as {
     xdr?: string;
     network?: Network;
     webhookUrl?: string;
     ledgerSequence?: number;
+    dryRun?: boolean;
   };
+
+  // Check for dryRun flag in query params or body
+  const isDryRun = req.query.dryRun === "true" || dryRun === true;
+
+  if (isDryRun) {
+    // Route to dry-run logic
+    return simulateDryRun(req, res, next);
+  }
 
   const xdrCheck = validateXdrInput(xdr);
   if (!xdrCheck.valid) {
@@ -286,6 +306,7 @@ export async function simulate(
         };
 
     res.setHeader("X-Cache", result.cacheHit ? "HIT" : "MISS");
+    res.setHeader("X-Simulation-Mode", "live");
     res
       .status(
         resultWithCode.success
@@ -414,9 +435,21 @@ export async function networkStatus(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const networkParam = (req.query.network as string) || DEFAULT_NETWORK;
+  const validation = validateQuery(NetworkStatusQuerySchema, req.query);
+  if (!validation.success) {
+    return next(
+      new AppError(
+        validation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        validation.issues,
+      ),
+    );
+  }
 
-  if (networkParam === "all") {
+  const { network } = validation.data;
+
+  if (network === "all") {
     try {
       const configured: Network[] = [];
       if (process.env.TESTNET_RPC_URL)
@@ -455,20 +488,10 @@ export async function networkStatus(
     return;
   }
 
-  const network = networkParam as Network;
-
-  if (
-    network !== NETWORKS.MAINNET &&
-    network !== NETWORKS.TESTNET &&
-    network !== NETWORKS.FUTURENET
-  ) {
-    return next(
-      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
-    );
-  }
+  const net = network as Network;
 
   try {
-    const status = await getNetworkStatus(network);
+    const status = await getNetworkStatus(net);
     const response: ResponseEnvelope = { success: true, data: status };
     res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {
@@ -515,9 +538,23 @@ export async function footprintDiffController(
     );
   }
 
+  const queryValidation = validateQuery(FootprintDiffQuerySchema, req.query);
+  if (!queryValidation.success) {
+    return next(
+      new AppError(
+        queryValidation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        queryValidation.issues,
+      ),
+    );
+  }
+
+  const { format } = queryValidation.data;
+
   try {
     const diff = footprintDiff(before, after);
-    if (req.query.format === "markdown") {
+    if (format === "markdown") {
       res
         .status(HTTP_STATUS.OK)
         .type("text/markdown")
@@ -867,10 +904,19 @@ export async function estimateFeeController(
 }
 
 export function decode(req: Request, res: Response, next: NextFunction): void {
-  const { xdr, type = "transaction" } = req.query as {
-    xdr?: string;
-    type?: string;
-  };
+  const validation = validateQuery(DecodeQuerySchema, req.query);
+  if (!validation.success) {
+    return next(
+      new AppError(
+        validation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        validation.issues,
+      ),
+    );
+  }
+
+  const { xdr, type = "transaction" } = validation.data;
 
   const xdrCheck = validateXdrInput(xdr);
   if (!xdrCheck.valid) {
@@ -911,29 +957,19 @@ export async function costBreakdownController(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { cpuInsns, memBytes, network } = req.query as {
-    cpuInsns?: string;
-    memBytes?: string;
-    network?: string;
-  };
-
-  if (!cpuInsns || !memBytes) {
+  const validation = validateQuery(CostBreakdownQuerySchema, req.query);
+  if (!validation.success) {
     return next(
       new AppError(
-        "Missing required query parameters: cpuInsns and memBytes",
+        validation.error,
         HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        validation.issues,
       ),
     );
   }
 
-  if (!/^\d+$/.test(cpuInsns) || !/^\d+$/.test(memBytes)) {
-    return next(
-      new AppError(
-        "cpuInsns and memBytes must be non-negative integer strings",
-        HTTP_STATUS.BAD_REQUEST,
-      ),
-    );
-  }
+  const { cpuInsns, memBytes, network } = validation.data;
 
   if (
     network &&
@@ -996,7 +1032,9 @@ export function simulateDryRun(
     );
   }
   try {
-    res.status(HTTP_STATUS.OK).json(analyzeDryRun(xdr!, net));
+    const result = analyzeDryRun(xdr!, net);
+    res.setHeader("X-Simulation-Mode", "dry-run");
+    res.status(HTTP_STATUS.OK).json(result);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to parse XDR";
     next(new AppError(message, HTTP_STATUS.BAD_REQUEST));
@@ -1045,22 +1083,19 @@ export function getSimulateHistory(
       req.socket.remoteAddress ||
       "unknown";
 
-    const limitRaw = req.query.limit as string | undefined;
-    const offsetRaw = req.query.offset as string | undefined;
-    const status = req.query.status as string | undefined;
+    const validation = validateQuery(SimulateHistoryQuerySchema, req.query);
+    if (!validation.success) {
+      return next(
+        new AppError(
+          validation.error,
+          HTTP_STATUS.BAD_REQUEST,
+          ErrorCode.INVALID_QUERY_PARAMETERS,
+          validation.issues,
+        ),
+      );
+    }
 
-    const limit = limitRaw === undefined ? 20 : parseInt(limitRaw, 10);
-    const offset = offsetRaw === undefined ? 0 : parseInt(offsetRaw, 10);
-
-    if (Number.isNaN(limit) || limit < 1 || limit > 100) {
-      return next(new AppError("Invalid limit", HTTP_STATUS.BAD_REQUEST));
-    }
-    if (Number.isNaN(offset) || offset < 0) {
-      return next(new AppError("Invalid offset", HTTP_STATUS.BAD_REQUEST));
-    }
-    if (status !== undefined && status !== "success" && status !== "failed") {
-      return next(new AppError("Invalid status", HTTP_STATUS.BAD_REQUEST));
-    }
+    const { limit, offset, status } = validation.data;
 
     const now = Date.now();
     let raw = (historyStore.get(ip) ?? []).filter((e) => e.expiresAt > now);
@@ -1120,7 +1155,17 @@ export async function simulateBatchStream(
   res: Response,
 ): Promise<void> {
   // Parse XDRs from query parameter: comma-separated string or JSON array.
-  const rawXdrs = req.query.xdrs as string | undefined;
+  const validation = validateQuery(SimulateBatchStreamQuerySchema, req.query);
+  if (!validation.success) {
+    res.status(HTTP_STATUS.BAD_REQUEST).json({
+      success: false,
+      error: validation.error,
+      code: ErrorCode.INVALID_QUERY_PARAMETERS,
+    });
+    return;
+  }
+
+  const { xdrs: rawXdrs, network } = validation.data;
   let xdrs: string[] = [];
 
   if (rawXdrs) {
@@ -1142,8 +1187,7 @@ export async function simulateBatchStream(
     }
   }
 
-  const networkParam = (req.query.network as string) || DEFAULT_NETWORK;
-  const network: Network = (networkParam as Network) || DEFAULT_NETWORK;
+  const net: Network = (network as Network) || DEFAULT_NETWORK;
 
   // Set SSE headers before writing any data.
   res.setHeader("Content-Type", "text/event-stream");
@@ -1185,7 +1229,7 @@ export async function simulateBatchStream(
     try {
       const result = await simulateTransaction(
         xdr,
-        network,
+        net,
         res.locals.abortSignal,
       );
 
@@ -1265,4 +1309,131 @@ export function rpcStatus(
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
   }
+}
+
+// ---------------------------------------------------------------------------
+// #44 — GET /contract/:contractId/ttl — Contract TTL lookup
+// ---------------------------------------------------------------------------
+
+export async function contractTtl(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const paramsValidation = validateQuery(ContractTtlParamsSchema, req.params);
+  if (!paramsValidation.success) {
+    return next(
+      new AppError(
+        paramsValidation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        paramsValidation.issues,
+      ),
+    );
+  }
+
+  const queryValidation = validateQuery(ContractTtlQuerySchema, req.query);
+  if (!queryValidation.success) {
+    return next(
+      new AppError(
+        queryValidation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        queryValidation.issues,
+      ),
+    );
+  }
+
+  const { contractId } = paramsValidation.data;
+  const { network } = queryValidation.data;
+
+  const net: Network = (network as Network) || DEFAULT_NETWORK;
+
+  try {
+    const ttlInfo = await fetchContractTtl(net, contractId);
+    if (!ttlInfo) {
+      return next(
+        new AppError(
+          "Contract not found on the specified network",
+          HTTP_STATUS.NOT_FOUND,
+          ErrorCode.JOB_NOT_FOUND,
+        ),
+      );
+    }
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      data: {
+        contractId,
+        liveUntilLedger: ttlInfo.liveUntilLedger,
+        remainingLedgers: ttlInfo.remainingLedgers,
+        estimatedExpirationDate: ttlInfo.estimatedExpirationDate,
+        currentLedger: ttlInfo.currentLedger,
+        network: net,
+      },
+    });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #45 — POST /decode/batch — Bulk XDR decoding
+// ---------------------------------------------------------------------------
+
+export function decodeBatch(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const validation = validateBody(DecodeBatchBodySchema, req.body);
+  if (!validation.success) {
+    return next(
+      new AppError(
+        validation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        validation.issues,
+      ),
+    );
+  }
+
+  const { items } = validation.data;
+
+  const results = items.map((item) => {
+    const xdrCheck = validateXdrInput(item.xdr);
+    if (!xdrCheck.valid) {
+      return {
+        id: item.id,
+        success: false,
+        error: xdrCheck.error,
+      };
+    }
+
+    try {
+      const result = decodeXdr(item.xdr, item.type);
+      if (!result.success) {
+        return {
+          id: item.id,
+          success: false,
+          error: result.error ?? "Failed to decode XDR",
+        };
+      }
+      return {
+        id: item.id,
+        success: true,
+        decoded: result.decoded,
+      };
+    } catch (err: unknown) {
+      return {
+        id: item.id,
+        success: false,
+        error: err instanceof Error ? err.message : "Failed to decode XDR",
+      };
+    }
+  });
+
+  res.status(HTTP_STATUS.OK).json({ results });
 }
