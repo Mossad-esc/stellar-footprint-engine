@@ -884,3 +884,396 @@ describe("Async webhook simulation and job status", () => {
     });
   });
 });
+
+// ── #42: Query Parameter Schema Validation via Zod for all GET Routes ────────
+
+describe("GET /api/v1/decode query validation", () => {
+  it("returns 400 with INVALID_QUERY_PARAMETERS when xdr is missing", async () => {
+    const res = await request(app).get("/api/v1/decode");
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: "INVALID_QUERY_PARAMETERS",
+    });
+    expect(res.body.error).toContain("Invalid query parameters");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS when xdr is empty", async () => {
+    const res = await request(app).get("/api/v1/decode").query({ xdr: "" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS for invalid type", async () => {
+    const res = await request(app)
+      .get("/api/v1/decode")
+      .query({ xdr: VALID_XDR, type: "invalid_type" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+});
+
+describe("GET /api/v1/simulate/cost-breakdown query validation", () => {
+  it("returns 400 with INVALID_QUERY_PARAMETERS when cpuInsns is missing", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/cost-breakdown")
+      .query({ memBytes: "5000" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS when memBytes is missing", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/cost-breakdown")
+      .query({ cpuInsns: "100000" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS when cpuInsns is not a valid integer", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/cost-breakdown")
+      .query({ cpuInsns: "abc", memBytes: "5000" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS when memBytes is not a valid integer", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/cost-breakdown")
+      .query({ cpuInsns: "100000", memBytes: "xyz" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS for invalid network", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/cost-breakdown")
+      .query({ cpuInsns: "100000", memBytes: "5000", network: "invalid" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+});
+
+describe("GET /api/v1/simulate/history query validation", () => {
+  it("returns 400 with INVALID_QUERY_PARAMETERS for invalid limit", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/history")
+      .query({ limit: "0" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS for limit > 100", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/history")
+      .query({ limit: "101" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS for negative offset", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/history")
+      .query({ offset: "-1" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS for invalid status", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/history")
+      .query({ status: "invalid" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("accepts valid query parameters", async () => {
+    const res = await request(app)
+      .get("/api/v1/simulate/history")
+      .query({ limit: "10", offset: "0", status: "success" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("page");
+    expect(res.body).toHaveProperty("limit");
+    expect(res.body).toHaveProperty("total");
+  });
+});
+
+describe("GET /api/v1/network/status query validation", () => {
+  it("returns 400 with INVALID_QUERY_PARAMETERS for invalid network", async () => {
+    const res = await request(app)
+      .get("/api/v1/network/status")
+      .query({ network: "invalid" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("accepts 'all' as network parameter", async () => {
+    const res = await request(app)
+      .get("/api/v1/network/status")
+      .query({ network: "all" });
+
+    expect(res.status).toBe(200);
+  });
+});
+
+// ── #43: Dry-Run Flag Support on POST /simulate ───────────────────────────
+
+describe("POST /api/v1/simulate dryRun flag", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("executes dry-run when dryRun=true query parameter is provided", async () => {
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .query({ dryRun: "true" })
+      .send({ xdr: VALID_XDR, network: "testnet" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers["x-simulation-mode"]).toBe("dry-run");
+    expect(res.body.dryRun).toBe(true);
+  });
+
+  it("executes dry-run when dryRun=true in request body", async () => {
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .send({ xdr: VALID_XDR, network: "testnet", dryRun: true });
+
+    expect(res.status).toBe(200);
+    expect(res.headers["x-simulation-mode"]).toBe("dry-run");
+    expect(res.body.dryRun).toBe(true);
+  });
+
+  it("executes live simulation when dryRun is not provided", async () => {
+    const mockResult = {
+      success: true,
+      footprint: { readOnly: [], readWrite: [] },
+      contracts: [],
+      contractType: "unknown" as const,
+      ttl: {},
+      optimized: false,
+      rawFootprint: { readOnly: [], readWrite: [] },
+      cost: { cpuInsns: "0", memBytes: "0" },
+    };
+    mockSimulateTransaction.mockResolvedValueOnce(mockResult);
+
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .send({ xdr: VALID_XDR, network: "testnet" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers["x-simulation-mode"]).toBe("live");
+    expect(mockSimulateTransaction).toHaveBeenCalled();
+  });
+
+  it("returns 400 for invalid dryRun value in query", async () => {
+    const res = await request(app)
+      .post("/api/v1/simulate")
+      .query({ dryRun: "invalid" })
+      .send({ xdr: VALID_XDR });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── #44: GET /contract/:contractId/ttl ────────────────────────────────────
+
+describe("GET /api/v1/contract/:contractId/ttl", () => {
+  const VALID_CONTRACT_ID =
+    "CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS for invalid contract ID format", async () => {
+    const res = await request(app).get(
+      "/api/v1/contract/not-a-valid-contract/ttl",
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 with INVALID_QUERY_PARAMETERS for invalid network", async () => {
+    const res = await request(app)
+      .get(`/api/v1/contract/${VALID_CONTRACT_ID}/ttl`)
+      .query({ network: "invalid" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 404 when contract is not found", async () => {
+    // Mock the RPC client to return null (contract not found)
+    jest.doMock("@services/rpcClient", () => ({
+      ...jest.requireActual("@services/rpcClient"),
+      fetchContractTtl: jest.fn().mockResolvedValue(null),
+    }));
+
+    const res = await request(app).get(
+      `/api/v1/contract/${VALID_CONTRACT_ID}/ttl`,
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("JOB_NOT_FOUND");
+  });
+
+  it("returns TTL information for valid contract", async () => {
+    // Mock the RPC client to return TTL info
+    jest.doMock("@services/rpcClient", () => ({
+      ...jest.requireActual("@services/rpcClient"),
+      fetchContractTtl: jest.fn().mockResolvedValue({
+        liveUntilLedger: 12345678,
+        remainingLedgers: 50000,
+        estimatedExpirationDate: "2024-06-15T10:30:00.000Z",
+        currentLedger: 12295678,
+      }),
+    }));
+
+    const res = await request(app).get(
+      `/api/v1/contract/${VALID_CONTRACT_ID}/ttl`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toMatchObject({
+      contractId: VALID_CONTRACT_ID,
+      liveUntilLedger: 12345678,
+      remainingLedgers: 50000,
+      network: "testnet",
+    });
+  });
+});
+
+// ── #45: POST /decode/batch ───────────────────────────────────────────────
+
+describe("POST /api/v1/decode/batch", () => {
+  const VALID_TX_XDR =
+    "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==";
+
+  const VALID_LEDGER_KEY_XDR =
+    "AAAABgAAAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAABQAAAAB";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("returns 400 when items array is missing", async () => {
+    const res = await request(app)
+      .post("/api/v1/decode/batch")
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 when items array is empty", async () => {
+    const res = await request(app)
+      .post("/api/v1/decode/batch")
+      .send({ items: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("returns 400 when items exceed maximum batch size of 25", async () => {
+    const items = Array(26)
+      .fill(null)
+      .map((_, i) => ({ id: `tx-${i}`, xdr: VALID_TX_XDR }));
+
+    const res = await request(app)
+      .post("/api/v1/decode/batch")
+      .send({ items });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
+  });
+
+  it("decodes multiple XDRs successfully", async () => {
+    const res = await request(app)
+      .post("/api/v1/decode/batch")
+      .send({
+        items: [
+          { id: "tx-1", xdr: VALID_TX_XDR, type: "transaction" },
+          { id: "tx-2", xdr: VALID_LEDGER_KEY_XDR, type: "ledger_key" },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(2);
+    expect(res.body.results[0]).toMatchObject({ id: "tx-1", success: true });
+    expect(res.body.results[1]).toMatchObject({ id: "tx-2", success: true });
+    expect(res.body.results[0].decoded).toBeDefined();
+    expect(res.body.results[1].decoded).toBeDefined();
+  });
+
+  it("handles invalid XDR gracefully without failing other items", async () => {
+    const res = await request(app)
+      .post("/api/v1/decode/batch")
+      .send({
+        items: [
+          { id: "valid-1", xdr: VALID_TX_XDR, type: "transaction" },
+          { id: "invalid", xdr: "not-valid-base64!!!", type: "transaction" },
+          { id: "valid-2", xdr: VALID_LEDGER_KEY_XDR, type: "ledger_key" },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(3);
+    expect(res.body.results[0]).toMatchObject({ id: "valid-1", success: true });
+    expect(res.body.results[1]).toMatchObject({
+      id: "invalid",
+      success: false,
+    });
+    expect(res.body.results[1].error).toBeDefined();
+    expect(res.body.results[2]).toMatchObject({ id: "valid-2", success: true });
+  });
+
+  it("works without id field in items", async () => {
+    const res = await request(app)
+      .post("/api/v1/decode/batch")
+      .send({
+        items: [
+          { xdr: VALID_TX_XDR },
+          { xdr: VALID_LEDGER_KEY_XDR, type: "ledger_key" },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(2);
+    expect(res.body.results[0].success).toBe(true);
+    expect(res.body.results[1].success).toBe(true);
+    expect(res.body.results[0].id).toBeUndefined();
+    expect(res.body.results[1].id).toBeUndefined();
+  });
+
+  it("accepts large XDRs in request body that exceed GET query string limits", async () => {
+    // Create a larger XDR (simulating a complex transaction)
+    const largeXdr = VALID_TX_XDR.repeat(10);
+
+    const res = await request(app)
+      .post("/api/v1/decode/batch")
+      .send({
+        items: [{ id: "large", xdr: largeXdr }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results[0].success).toBe(true);
+  });
+});
