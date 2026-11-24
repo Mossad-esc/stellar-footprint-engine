@@ -228,6 +228,59 @@ export function resetRpcPool(): void {
   endpointPool.clear();
 }
 
+// ---------------------------------------------------------------------------
+// #65 — RPC response payload size limiter
+// ---------------------------------------------------------------------------
+
+/**
+ * Measure the serialised byte length of a value using a TextEncoder so that
+ * multi-byte characters are counted correctly.
+ */
+function byteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+/**
+ * Guard a simulate-transaction response against oversized payloads.
+ *
+ * - Rejects with ErrorCode.RPC_PAYLOAD_TOO_LARGE when the serialised response
+ *   exceeds RPC_MAX_PAYLOAD_BYTES (default 10 MB).
+ * - Truncates diagnostic events and emits a warning when the payload exceeds
+ *   RPC_PAYLOAD_WARN_BYTES (default 2 MB) but stays under the hard limit.
+ */
+export function guardPayloadSize(
+  response: StellarSdk.rpc.Api.SimulateTransactionResponse,
+): StellarSdk.rpc.Api.SimulateTransactionResponse {
+  const size = byteLength(response);
+
+  if (size > RPC_MAX_PAYLOAD_BYTES) {
+    const err = Object.assign(
+      new Error(
+        `RPC response payload too large: ${size} bytes exceeds the ${RPC_MAX_PAYLOAD_BYTES}-byte limit`,
+      ),
+      { code: ErrorCode.RPC_PAYLOAD_TOO_LARGE },
+    );
+    throw err;
+  }
+
+  if (size > RPC_PAYLOAD_WARN_BYTES) {
+    logger.warn(
+      { payloadBytes: size, warnThresholdBytes: RPC_PAYLOAD_WARN_BYTES },
+      "RPC response payload exceeds warn threshold; truncating diagnostic events",
+    );
+
+    const events = (response as unknown as { events?: unknown[] }).events ?? [];
+    if (events.length > RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT) {
+      return {
+        ...response,
+        events: events.slice(0, RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT),
+      } as StellarSdk.rpc.Api.SimulateTransactionResponse;
+    }
+  }
+
+  return response;
+}
+
 /**
  * Sanitize a URL by masking credentials and sensitive query parameters.
  * - Masks basic-auth user:pass in the URL authority.
@@ -385,7 +438,9 @@ export async function simulateViaRpc(
   const hasPool = getRpcUrls(network).length > 0;
   if (!hasPool) {
     const server = getRpcServer(network);
-    return server.simulateTransaction(tx, simOptions as never);
+    return guardPayloadSize(
+      await server.simulateTransaction(tx, simOptions as never),
+    );
   }
 
   let lastError: unknown;

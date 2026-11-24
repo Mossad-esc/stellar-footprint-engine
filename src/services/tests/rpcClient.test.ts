@@ -3,6 +3,7 @@ import * as StellarSdk from "@stellar/stellar-sdk";
 import * as stellarConfig from "../../config/stellar";
 import {
   fetchTtlInfo,
+  guardPayloadSize,
   parseRpcUrls,
   recordEndpointResult,
   resetRpcPool,

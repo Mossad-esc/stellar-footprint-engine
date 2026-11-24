@@ -91,6 +91,29 @@ export const BATCH_MAX_SIZE =
     ? _batchMaxSizeEnv
     : 10;
 
+/**
+ * Maximum RPC response payload size accepted before the response is rejected.
+ * Configurable via RPC_MAX_PAYLOAD_BYTES env var. Default: 10 MB.
+ */
+export const RPC_MAX_PAYLOAD_BYTES =
+  parseInt(process.env.RPC_MAX_PAYLOAD_BYTES ?? String(10 * 1024 * 1024), 10) ||
+  10 * 1024 * 1024;
+
+/**
+ * Payload size (bytes) above which a warning is emitted and diagnostic events
+ * are truncated to preserve essential footprint data. Default: 2 MB.
+ */
+export const RPC_PAYLOAD_WARN_BYTES =
+  parseInt(process.env.RPC_PAYLOAD_WARN_BYTES ?? String(2 * 1024 * 1024), 10) ||
+  2 * 1024 * 1024;
+
+/**
+ * Maximum number of diagnostic events retained when the payload exceeds the
+ * warn threshold. Default: 50.
+ */
+export const RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT =
+  parseInt(process.env.RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT ?? "50", 10) || 50;
+
 export enum ErrorCode {
   MISSING_XDR = "MISSING_XDR",
   UNSUPPORTED_ENVELOPE_TYPE = "UNSUPPORTED_ENVELOPE_TYPE",
@@ -122,6 +145,7 @@ export enum ErrorCode {
   JOB_NOT_FOUND = "JOB_NOT_FOUND",
   UNAUTHORIZED = "UNAUTHORIZED",
   XDR_DEPTH_EXCEEDED = "XDR_DEPTH_EXCEEDED",
+  RPC_PAYLOAD_TOO_LARGE = "RPC_PAYLOAD_TOO_LARGE",
 }
 
 /** Maximum allowed recursion depth when decoding nested XDR ScVal/LedgerKey structures. */
