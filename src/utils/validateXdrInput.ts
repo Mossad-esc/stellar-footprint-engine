@@ -77,7 +77,6 @@ export function enforceXdrLimits(
   }
   return guard.nodeCount;
 }
-=======
 
 /**
  * The first four bytes of an XDR-encoded TransactionEnvelope encode the
@@ -125,7 +124,6 @@ export function validateXdrInput(xdr: unknown): XdrValidationResult {
   if (decodedBytes.length > MAX_XDR_BYTES) {
     return { valid: false, error: "XDR too large: maximum 100kb" };
   }
-=======
 
   // Reject legacy v0 envelopes with a clear, actionable message.
   if (isV0Envelope(xdr)) {

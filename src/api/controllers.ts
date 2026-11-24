@@ -31,6 +31,7 @@ import {
   failJob,
   getJob,
   InvalidWebhookUrlError,
+  retryDeadLetter,
 } from "@services/webhook";
 import { AppError } from "@utils/AppError";
 import { rpcCircuitBreaker } from "@utils/circuitBreaker";
@@ -220,6 +221,22 @@ export async function simulate(
 
   const net: Network = (network as Network) || DEFAULT_NETWORK;
 
+  // maxLedgerAge from query param or Cache-Control: max-age-ledgers=N
+  let maxLedgerAge: number | undefined;
+  const maxLedgerAgeQuery = (req.query.maxLedgerAge as string) || "";
+  if (maxLedgerAgeQuery !== "") {
+    const parsed = parseInt(maxLedgerAgeQuery, 10);
+    if (!isNaN(parsed) && parsed > 0) maxLedgerAge = parsed;
+  }
+  if (maxLedgerAge === undefined) {
+    const cacheControl = (req.headers["cache-control"] as string) || "";
+    const match = cacheControl.match(/max-age-ledgers=(\d+)/);
+    if (match) {
+      const parsed = parseInt(match[1], 10);
+      if (!isNaN(parsed) && parsed > 0) maxLedgerAge = parsed;
+    }
+  }
+
   if (webhookUrl !== undefined) {
     if (typeof webhookUrl !== "string") {
       return next(
@@ -249,7 +266,7 @@ export async function simulate(
       // ignore — never block the request for a metrics failure
     }
 
-    void simulateTransaction(xdrValue, net, undefined, ledgerSequence)
+    void simulateTransaction(xdrValue, net, undefined, ledgerSequence, maxLedgerAge)
       .then((result) => {
         const duration = (Date.now() - start) / 1000;
         metrics.recordSimulation(net, result.success);
@@ -288,6 +305,7 @@ export async function simulate(
       net,
       res.locals.abortSignal,
       ledgerSequence,
+      maxLedgerAge,
     );
     const duration = (Date.now() - start) / 1000;
     metrics.recordSimulation(net, result.success);
@@ -1312,128 +1330,42 @@ export function rpcStatus(
 }
 
 // ---------------------------------------------------------------------------
-// #44 — GET /contract/:contractId/ttl — Contract TTL lookup
+// POST /simulate/jobs/:jobId/retry — manually redeliver a dead-lettered webhook
 // ---------------------------------------------------------------------------
 
-export async function contractTtl(
+export async function retrySimulationJob(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const paramsValidation = validateQuery(ContractTtlParamsSchema, req.params);
-  if (!paramsValidation.success) {
+  const { jobId } = req.params as { jobId?: string };
+
+  if (!jobId) {
+    return next(new AppError("Webhook job not found", HTTP_STATUS.NOT_FOUND));
+  }
+
+  const job = getJob(jobId);
+  if (!job) {
+    return next(new AppError("Webhook job not found", HTTP_STATUS.NOT_FOUND));
+  }
+
+  const retried = await retryDeadLetter(jobId);
+  if (!retried) {
     return next(
       new AppError(
-        paramsValidation.error,
+        "Only dead-lettered jobs can be retried",
         HTTP_STATUS.BAD_REQUEST,
-        ErrorCode.INVALID_QUERY_PARAMETERS,
-        paramsValidation.issues,
       ),
     );
   }
 
-  const queryValidation = validateQuery(ContractTtlQuerySchema, req.query);
-  if (!queryValidation.success) {
-    return next(
-      new AppError(
-        queryValidation.error,
-        HTTP_STATUS.BAD_REQUEST,
-        ErrorCode.INVALID_QUERY_PARAMETERS,
-        queryValidation.issues,
-      ),
-    );
-  }
-
-  const { contractId } = paramsValidation.data;
-  const { network } = queryValidation.data;
-
-  const net: Network = (network as Network) || DEFAULT_NETWORK;
-
-  try {
-    const ttlInfo = await fetchContractTtl(net, contractId);
-    if (!ttlInfo) {
-      return next(
-        new AppError(
-          "Contract not found on the specified network",
-          HTTP_STATUS.NOT_FOUND,
-          ErrorCode.JOB_NOT_FOUND,
-        ),
-      );
-    }
-
-    res.status(HTTP_STATUS.OK).json({
-      success: true,
-      data: {
-        contractId,
-        liveUntilLedger: ttlInfo.liveUntilLedger,
-        remainingLedgers: ttlInfo.remainingLedgers,
-        estimatedExpirationDate: ttlInfo.estimatedExpirationDate,
-        currentLedger: ttlInfo.currentLedger,
-        network: net,
-      },
-    });
-  } catch (err: unknown) {
-    const message =
-      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
-    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
-  }
-}
-
-// ---------------------------------------------------------------------------
-// #45 — POST /decode/batch — Bulk XDR decoding
-// ---------------------------------------------------------------------------
-
-export function decodeBatch(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
-  const validation = validateBody(DecodeBatchBodySchema, req.body);
-  if (!validation.success) {
-    return next(
-      new AppError(
-        validation.error,
-        HTTP_STATUS.BAD_REQUEST,
-        ErrorCode.INVALID_QUERY_PARAMETERS,
-        validation.issues,
-      ),
-    );
-  }
-
-  const { items } = validation.data;
-
-  const results = items.map((item) => {
-    const xdrCheck = validateXdrInput(item.xdr);
-    if (!xdrCheck.valid) {
-      return {
-        id: item.id,
-        success: false,
-        error: xdrCheck.error,
-      };
-    }
-
-    try {
-      const result = decodeXdr(item.xdr, item.type);
-      if (!result.success) {
-        return {
-          id: item.id,
-          success: false,
-          error: result.error ?? "Failed to decode XDR",
-        };
-      }
-      return {
-        id: item.id,
-        success: true,
-        decoded: result.decoded,
-      };
-    } catch (err: unknown) {
-      return {
-        id: item.id,
-        success: false,
-        error: err instanceof Error ? err.message : "Failed to decode XDR",
-      };
-    }
+  res.status(HTTP_STATUS.OK).json({
+    success: true,
+    data: {
+      jobId,
+      status: "pending",
+      deliveryStatus: "pending",
+      message: "Webhook redelivery scheduled",
+    },
   });
-
-  res.status(HTTP_STATUS.OK).json({ results });
 }

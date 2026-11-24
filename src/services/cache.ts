@@ -567,6 +567,93 @@ class RedisCache implements CacheService {
 }
 
 // ---------------------------------------------------------------------------
+// Tiered cache: L1 in-memory LRU + L2 Redis (#47)
+// ---------------------------------------------------------------------------
+
+const L1_MAX_SIZE = 500;
+const L1_TTL_MS = 15_000;
+const L2_TTL_MS = 60_000;
+
+export class TieredCache implements CacheService {
+  readonly backend = "tiered" as const;
+  readonly staleWhileRevalidate: boolean;
+
+  private readonly l1: AsyncLruMemoryCache;
+  private readonly l2: RedisCache | null;
+
+  constructor(l1: AsyncLruMemoryCache, l2: RedisCache | null = null) {
+    this.l1 = l1;
+    this.l2 = l2;
+    this.staleWhileRevalidate = l1.staleWhileRevalidate;
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    const l1Hit = await this.l1.get<T>(key);
+    if (l1Hit !== null) {
+      metrics.recordL1Hit("simulation");
+      return l1Hit;
+    }
+    metrics.recordL1Miss("simulation");
+
+    if (this.l2) {
+      const l2Hit = await this.l2.get<T>(key);
+      if (l2Hit !== null) {
+        metrics.recordL2Hit("simulation");
+        await this.l1.set(key, l2Hit, L1_TTL_MS);
+        return l2Hit;
+      }
+    }
+    metrics.recordL2Miss("simulation");
+
+    return null;
+  }
+
+  async getWithMeta<T>(
+    key: string,
+  ): Promise<{ value: T; isStale: boolean } | null> {
+    const l1Hit = await this.l1.getWithMeta<T>(key);
+    if (l1Hit) {
+      metrics.recordL1Hit("simulation");
+      return l1Hit;
+    }
+    metrics.recordL1Miss("simulation");
+
+    if (this.l2) {
+      const l2Hit = await this.l2.getWithMeta<T>(key);
+      if (l2Hit) {
+        metrics.recordL2Hit("simulation");
+        await this.l1.set(key, l2Hit.value, L1_TTL_MS);
+        return l2Hit;
+      }
+    }
+    metrics.recordL2Miss("simulation");
+
+    return null;
+  }
+
+  async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
+    await this.l1.set(key, value, Math.min(ttlMs, L1_TTL_MS));
+    if (this.l2) {
+      await this.l2.set(key, value, Math.max(ttlMs, L2_TTL_MS));
+    }
+  }
+
+  async delete(key: string): Promise<void> {
+    this.l1.delete(key);
+    if (this.l2) {
+      await this.l2.delete(key);
+    }
+  }
+
+  async flush(): Promise<void> {
+    this.l1.flush();
+    if (this.l2) {
+      await this.l2.flush();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Factory — builds the right backend, falls back to memory on Redis failure
 // ---------------------------------------------------------------------------
 
@@ -647,6 +734,7 @@ function buildRedisClient(): RedisClient | ClusterClient | null {
 export function getCache(): CacheService {
   if (_cache) return _cache;
 
+  const l1 = new AsyncLruMemoryCache(L1_MAX_SIZE, CACHE_SWR_MS);
   const client = buildRedisClient();
 
   if (client) {
@@ -659,6 +747,8 @@ export function getCache(): CacheService {
             ? "sentinel"
             : "redis";
 
+      const l2 = new RedisCache(client, CACHE_SWR_MS, backendType);
+
       const scheduleFallback = () => {
         setRedisHealth("unhealthy");
         if (!ALLOW_CACHE_FALLBACK) {
@@ -668,10 +758,10 @@ export function getCache(): CacheService {
           return;
         }
         logger.warn(
-          "Redis unavailable — falling back to in-memory cache",
+          "Redis unavailable — falling back to L1-only cache",
         );
-        if (!_cache || _cache.backend !== "memory") {
-          _cache = new AsyncLruMemoryCache();
+        if (!_cache || _cache.backend !== "tiered") {
+          _cache = new TieredCache(l1);
         }
       };
 
@@ -699,33 +789,28 @@ export function getCache(): CacheService {
       client.on("close", () => {
         logger.warn("Redis connection closed — scheduling reconnect");
         setRedisHealth("unhealthy");
-        // The retryStrategy handles reconnection; we just log
       });
 
-      // Auto-recover: when the client reconnects after an outage, restore the
-      // Redis backend so subsequent writes go to Redis instead of memory.
-      // The "ready" event fires after the initial connect and after every
-      // successful reconnection (ioredis handles reconnection automatically).
       client.on("ready", () => {
-        logger.info("Redis cache ready — restoring Redis backend");
+        logger.info("Redis cache ready — restoring L2 backend");
         setRedisHealth("healthy");
-        _cache = new RedisCache(client, CACHE_SWR_MS, backendType);
+        if (!_cache || _cache.backend !== "tiered") {
+          _cache = new TieredCache(l1, l2);
+        }
       });
 
-      // Non-blocking boot: assume Redis is healthy until the first error.
-      // ioredis connects in the background; we never await it here.
       setRedisHealth("healthy");
-      _cache = new RedisCache(client, CACHE_SWR_MS, backendType);
-      logger.info({ backend: backendType }, "Cache backend: Redis");
+      _cache = new TieredCache(l1, l2);
+      logger.info({ backend: backendType }, "Cache backend: tiered (L1 memory + L2 Redis)");
     } catch (err) {
-      logger.warn({ err }, "Failed to initialise Redis — falling back to in-memory cache");
+      logger.warn({ err }, "Failed to initialise Redis — falling back to L1-only cache");
       setRedisHealth("unhealthy");
-      _cache = new AsyncLruMemoryCache();
+      _cache = new TieredCache(l1);
     }
   } else {
-    _cache = new AsyncLruMemoryCache();
+    _cache = new TieredCache(l1);
     setRedisHealth("disabled");
-    logger.info("Cache backend: in-memory LRU (REDIS_URL not set)");
+    logger.info("Cache backend: L1 memory LRU (REDIS_URL not set)");
   }
 
   return _cache;

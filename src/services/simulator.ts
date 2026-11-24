@@ -17,11 +17,13 @@ import {
 // import { calculateResourceFee } from "./feeEstimator"; // unused
 import {
   ErrorCode,
+  SIMULATION_CACHE_TTL_MS,
   TTL_WARNING_THRESHOLD_LEDGERS,
   TTL_EXTENSION_SAFETY_LEDGERS,
 } from "../constants";
 import metrics from "../middleware/metrics";
 import { buildCacheKey, getCache } from "../services/cache";
+import { getLatestLedger } from "../services/networkStatus";
 import { injectTraceHeaders, withSpan } from "../tracing";
 import {
   FootprintStats,
@@ -36,11 +38,16 @@ import {
   SignerThresholdReport,
 } from "../types";
 import { rpcCircuitBreaker } from "../utils/circuitBreaker";
+import { singleflight } from "../utils/singleflight";
 import { withRetry } from "../utils/retry";
 import {
   sanitizeRpcError,
   type SanitizedRpcError,
 } from "../utils/rpcErrorSanitizer";
+
+/** Maximum ledger drift before a cached simulation is treated as stale. */
+const MAX_LEDGER_DRIFT =
+  parseInt(process.env.MAX_LEDGER_DRIFT ?? "1", 10) || 1;
 
 /** Match TTL records by ledger key hash, never by RPC response position. */
 function isTtlKey(key: StellarSdk.xdr.LedgerKey): boolean {
@@ -265,6 +272,8 @@ export interface SimulateResult {
   cacheHit?: boolean;
   type?: string;
   warnings?: string[];
+  /** The ledger sequence at which this result was simulated (for ledger-drift invalidation). */
+  cachedAtLedger?: number;
   // Resource limit exceeded fields
   remediation?: string;
   resourceExceeded?: "cpu_instructions" | "memory_bytes" | "footprint_entries";
@@ -369,6 +378,7 @@ export async function simulateTransaction(
   network: Network = "testnet",
   signal?: AbortSignal,
   ledgerSequence?: number,
+  maxLedgerAge?: number,
 ): Promise<SimulateResult> {
   const cache = getCache();
   const cacheKey = buildCacheKey({ xdr, network, ledgerSequence });
@@ -379,208 +389,239 @@ export async function simulateTransaction(
     { "cache.key": cacheKey, "cache.backend": cache.backend },
   );
   if (cached) {
-    cached.cacheHit = true;
-    metrics.recordCacheHit("simulation");
-    return cached;
-  }
-  metrics.recordCacheMiss("simulation");
-
-  // getNetworkConfig and getRpcServer are called inside the try block so that
-  // synchronous throws (e.g. missing RPC URL) are caught by the caller's
-  // error handler rather than propagating as unhandled rejections.
-  let server: StellarSdk.rpc.Server;
-  let networkPassphrase: string;
-  let tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction;
-
-  let upgradedFromV0 = false;
-
-  try {
-    ({ networkPassphrase } = getNetworkConfig(network));
-    server = getRpcServer(network);
-    tx = StellarSdk.TransactionBuilder.fromXDR(xdr, networkPassphrase);
-  } catch (err) {
-    throw err;
-  }
-
-  // Upgrade v0 envelopes to v1 before simulation
-  if (
-    !(tx instanceof StellarSdk.FeeBumpTransaction) &&
-    tx.toEnvelope().type === "envelopeTypeTxV0"
-  ) {
-    tx = StellarSdk.TransactionBuilder.cloneFrom(
-      tx as StellarSdk.Transaction,
-    ).build();
-    upgradedFromV0 = true;
+    const effectiveMaxLedgerAge = maxLedgerAge ?? MAX_LEDGER_DRIFT;
+    let currentLedger: number | undefined;
+    try {
+      currentLedger = await getLatestLedger(network);
+    } catch {
+      cached.cacheHit = true;
+      metrics.recordCacheHit("simulation");
+      return cached;
+    }
+    if (
+      cached.cachedAtLedger !== undefined &&
+      currentLedger - cached.cachedAtLedger > effectiveMaxLedgerAge
+    ) {
+      await cache.delete(cacheKey);
+      metrics.recordCacheMiss("simulation");
+    } else {
+      cached.cacheHit = true;
+      metrics.recordCacheHit("simulation");
+      return cached;
+    }
+  } else {
+    metrics.recordCacheMiss("simulation");
   }
 
-  if (tx instanceof StellarSdk.FeeBumpTransaction) {
-    const innerTx = tx.innerTransaction;
-    const innerXdr = innerTx.toXDR();
-    const result = await simulateTransaction(
-      innerXdr,
-      network,
+  const result = await singleflight.do<SimulateResult>(cacheKey, async () => {
+    // getNetworkConfig and getRpcServer are called inside the try block so that
+    // synchronous throws (e.g. missing RPC URL) are caught by the caller's
+    // error handler rather than propagating as unhandled rejections.
+    let server: StellarSdk.rpc.Server;
+    let networkPassphrase: string;
+    let tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction;
+
+    let upgradedFromV0 = false;
+
+    try {
+      ({ networkPassphrase } = getNetworkConfig(network));
+      server = getRpcServer(network);
+      tx = StellarSdk.TransactionBuilder.fromXDR(xdr, networkPassphrase);
+    } catch (err) {
+      throw err;
+    }
+
+    // Upgrade v0 envelopes to v1 before simulation
+    if (
+      !(tx instanceof StellarSdk.FeeBumpTransaction) &&
+      tx.toEnvelope().type === "envelopeTypeTxV0"
+    ) {
+      tx = StellarSdk.TransactionBuilder.cloneFrom(
+        tx as StellarSdk.Transaction,
+      ).build();
+      upgradedFromV0 = true;
+    }
+
+    if (tx instanceof StellarSdk.FeeBumpTransaction) {
+      const innerTx = tx.innerTransaction;
+      const innerXdr = innerTx.toXDR();
+      const result = await simulateTransaction(
+        innerXdr,
+        network,
+        signal,
+        ledgerSequence,
+        maxLedgerAge,
+      );
+      result.feeBump = true;
+      return result;
+    }
+
+    // Reject classic (non-Soroban) transactions before hitting the RPC
+    const hasSorobanOp = (tx as StellarSdk.Transaction).operations.some(
+      (op) => op.type === "invokeHostFunction",
+    );
+    if (!hasSorobanOp) {
+      return {
+        success: false,
+        type: "invalid_transaction" as const,
+        error:
+          "Transaction must contain a Soroban operation (invokeHostFunction).",
+        code: ErrorCode.TRANSACTION_MISSING_SOROBAN_OPERATION,
+      };
+    }
+
+    interface SimulateOptions {
+      signal?: AbortSignal;
+      includeEvents?: boolean;
+      ledger?: number;
+      cpuInstructions: number;
+      headers?: Record<string, string>;
+    }
+    const rpcHeaders = injectTraceHeaders();
+    const simOptions: SimulateOptions = {
       signal,
-      ledgerSequence,
-    );
-    result.feeBump = true;
-    return result;
-  }
-
-  // Reject classic (non-Soroban) transactions before hitting the RPC
-  const hasSorobanOp = (tx as StellarSdk.Transaction).operations.some(
-    (op) => op.type === "invokeHostFunction",
-  );
-  if (!hasSorobanOp) {
-    return {
-      success: false,
-      type: "invalid_transaction" as const,
-      error:
-        "Transaction must contain a Soroban operation (invokeHostFunction).",
-      code: ErrorCode.TRANSACTION_MISSING_SOROBAN_OPERATION,
+      includeEvents: true,
+      cpuInstructions: 0,
+      ...(Object.keys(rpcHeaders).length > 0 ? { headers: rpcHeaders } : {}),
     };
-  }
+    if (ledgerSequence !== undefined) {
+      simOptions.ledger = ledgerSequence;
+    }
 
-  interface SimulateOptions {
-    signal?: AbortSignal;
-    includeEvents?: boolean;
-    ledger?: number;
-    cpuInstructions: number;
-    headers?: Record<string, string>;
-  }
-  const rpcHeaders = injectTraceHeaders();
-  const simOptions: SimulateOptions = {
-    signal,
-    includeEvents: true,
-    cpuInstructions: 0,
-    ...(Object.keys(rpcHeaders).length > 0 ? { headers: rpcHeaders } : {}),
-  };
-  if (ledgerSequence !== undefined) {
-    simOptions.ledger = ledgerSequence;
-  }
-
-  let response;
-  try {
-    response = await withRetry(
-      () =>
-        rpcCircuitBreaker.call(() =>
-          withSpan(
-            "rpc.simulateTransaction",
-            () =>
-              server.simulateTransaction(
-                tx as StellarSdk.Transaction,
-                simOptions as Parameters<typeof server.simulateTransaction>[1],
-              ),
-            { "stellar.network": network },
+    let response;
+    try {
+      response = await withRetry(
+        () =>
+          rpcCircuitBreaker.call(() =>
+            withSpan(
+              "rpc.simulateTransaction",
+              () =>
+                server.simulateTransaction(
+                  tx as StellarSdk.Transaction,
+                  simOptions as Parameters<typeof server.simulateTransaction>[1],
+                ),
+              { "stellar.network": network },
+            ),
           ),
-        ),
-      `simulateTransaction:${network}`,
-    );
-  } catch (err) {
-    metrics.recordRpcError(network, "simulate_transaction_failure");
-    throw err;
-  }
-
-  if (StellarSdk.rpc.Api.isSimulationError(response)) {
-    const sanitized: SanitizedRpcError = sanitizeRpcError(response.error);
-    // Determine specific error code based on resource exceeded
-    let errorCode = ErrorCode.RPC_SIMULATION_ERROR;
-    if (sanitized.resourceExceeded) {
-      errorCode = ErrorCode.RESOURCE_LIMIT_EXCEEDED;
+        `simulateTransaction:${network}`,
+      );
+    } catch (err) {
+      metrics.recordRpcError(network, "simulate_transaction_failure");
+      throw err;
     }
-    return {
-      success: false,
-      type: "simulation_error" as const,
-      error: sanitized.message,
-      remediation: sanitized.remediation,
-      resourceExceeded: sanitized.resourceExceeded,
-      code: errorCode,
-      raw: response,
-    };
-  }
 
-  if (StellarSdk.rpc.Api.isSimulationRestore(response)) {
-    const data = response.transactionData.build().resources.footprint;
-    const restoreData =
-      response.restorePreamble.transactionData.build().resources.footprint;
-    const keys = [
-      ...data.readOnly,
-      ...data.readWrite,
-      ...restoreData.readOnly,
-      ...restoreData.readWrite,
-    ];
-    const ttl = await fetchTtlInfo(
+    if (StellarSdk.rpc.Api.isSimulationError(response)) {
+      const sanitized: SanitizedRpcError = sanitizeRpcError(response.error);
+      let errorCode = ErrorCode.RPC_SIMULATION_ERROR;
+      if (sanitized.resourceExceeded) {
+        errorCode = ErrorCode.RESOURCE_LIMIT_EXCEEDED;
+      }
+      return {
+        success: false,
+        type: "simulation_error" as const,
+        error: sanitized.message,
+        remediation: sanitized.remediation,
+        resourceExceeded: sanitized.resourceExceeded,
+        code: errorCode,
+        raw: response,
+      };
+    }
+
+    if (StellarSdk.rpc.Api.isSimulationRestore(response)) {
+      const data = response.transactionData.build().resources.footprint;
+      const restoreData =
+        response.restorePreamble.transactionData.build().resources.footprint;
+      const keys = [
+        ...data.readOnly,
+        ...data.readWrite,
+        ...restoreData.readOnly,
+        ...restoreData.readWrite,
+      ];
+      const ttl = await fetchTtlInfo(
+        server,
+        [...new Set(keys.map((key) => key.toXDR("base64")))],
+        response,
+      );
+      const ttlWarnings = buildTtlWarnings(ttl);
+      return {
+        success: false,
+        type: "restoration_required",
+        error: "Transaction requires ledger entry restoration before simulation.",
+        code: ErrorCode.SIMULATION_RESTORE_REQUIRED,
+        ttl,
+        ttlWarnings,
+        warnings: ttlWarnings,
+        cost: {
+          cpuInsns: "0",
+          memBytes: "0",
+          ttlExtension: recommendTtlExtension(ttl),
+        },
+        raw: response,
+      };
+    }
+
+    if (!response.transactionData) {
+      return {
+        success: false,
+        error:
+          "Simulation succeeded but transactionData is missing; cannot extract footprint.",
+        code: ErrorCode.SIMULATION_DATA_MISSING,
+        raw: response,
+      };
+    }
+    const responseCost = (
+      response as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse & {
+        cost?: { cpuInsns: string; memBytes: string };
+      }
+    ).cost;
+    const processed = await _processSimulationResult(
       server,
-      [...new Set(keys.map((key) => key.toXDR("base64")))],
+      response.transactionData.build(),
+      responseCost,
       response,
+      tx,
     );
+    const ttl = processed.ttl ?? {};
     const ttlWarnings = buildTtlWarnings(ttl);
+    const ledgerWarning = buildLedgerSequenceWarning(
+      ledgerSequence,
+      response.latestLedger,
+    );
+    const ttlExtension = recommendTtlExtension(ttl);
     return {
-      success: false,
-      type: "restoration_required",
-      error: "Transaction requires ledger entry restoration before simulation.",
-      code: ErrorCode.SIMULATION_RESTORE_REQUIRED,
-      ttl,
-      ttlWarnings,
-      warnings: ttlWarnings,
+      ...processed,
+      success: true,
       cost: {
-        cpuInsns: "0",
-        memBytes: "0",
-        ttlExtension: recommendTtlExtension(ttl),
+        cpuInsns: responseCost?.cpuInsns ?? "0",
+        memBytes: responseCost?.memBytes ?? "0",
+        ...(ttlExtension ? { ttlExtension } : {}),
       },
+      ttlWarnings,
+      warnings: [...ttlWarnings, ...(ledgerWarning ? [ledgerWarning] : [])],
       raw: response,
+      upgradedFromV0: upgradedFromV0 || undefined,
+      diagnosticEvents: (response.events ?? []).map((event) =>
+        event.toXDR("base64"),
+      ),
     };
-  }
+  });
 
-  if (!response.transactionData) {
-    return {
-      success: false,
-      error:
-        "Simulation succeeded but transactionData is missing; cannot extract footprint.",
-      code: ErrorCode.SIMULATION_DATA_MISSING,
-      raw: response,
-    };
-  }
-  const responseCost = (
-    response as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse & {
-      cost?: { cpuInsns: string; memBytes: string };
+  // Tag result with current ledger for drift-based invalidation, then write
+  // to both L1 and L2 cache tiers
+  if (result.success) {
+    try {
+      result.cachedAtLedger = await getLatestLedger(network);
+    } catch {
+      // ignore — cache without ledger tag
     }
-  ).cost;
-  const processed = await _processSimulationResult(
-    server,
-    response.transactionData.build(),
-    responseCost,
-    response,
-    tx,
-  );
-  const ttl = processed.ttl ?? {};
-  const ttlWarnings = buildTtlWarnings(ttl);
-  const ledgerWarning = buildLedgerSequenceWarning(
-    ledgerSequence,
-    response.latestLedger,
-  );
-  const ttlExtension = recommendTtlExtension(ttl);
-  const result: SimulateResult = {
-    ...processed,
-    success: true,
-    cost: {
-      cpuInsns: responseCost?.cpuInsns ?? "0",
-      memBytes: responseCost?.memBytes ?? "0",
-      ...(ttlExtension ? { ttlExtension } : {}),
-    },
-    ttlWarnings,
-    warnings: [...ttlWarnings, ...(ledgerWarning ? [ledgerWarning] : [])],
-    raw: response,
-    upgradedFromV0: upgradedFromV0 || undefined,
-    diagnosticEvents: (response.events ?? []).map((event) =>
-      event.toXDR("base64"),
-    ),
-  };
+  }
   const cacheTtlMs = parseInt(process.env.CACHE_TTL_MS || "60000", 10);
   await withSpan(
     "cache.set",
     () => cache.set(cacheKey, result, cacheTtlMs),
     { "cache.key": cacheKey, "cache.backend": cache.backend },
   );
+
   return result;
 }
 
