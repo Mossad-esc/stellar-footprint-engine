@@ -170,6 +170,25 @@ const singleflightPendingGauge = new client.Gauge({
   registers: [register],
 });
 
+// ---------------------------------------------------------------------------
+// Adaptive Request Hedging metrics (#hedging)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracks hedged RPC requests.
+ *
+ * Labels:
+ *   result = "dispatched" — a speculative backup request was sent because the
+ *                           primary exceeded HEDGE_DELAY_MS.
+ *   result = "won"        — the hedged (backup) request resolved first.
+ */
+const rpcHedgedRequestsTotal = new client.Counter({
+  name: "rpc_hedged_requests_total",
+  help: "Total number of hedged RPC requests dispatched and their win rate",
+  labelNames: ["result"],
+  registers: [register],
+});
+
 // Middleware to track HTTP metrics
 export function metricsMiddleware(
   req: Request,
@@ -209,12 +228,20 @@ export function metricsMiddleware(
 export const metrics = {
   recordCacheHit: (cacheType: string = "simulation") => {
     cacheHitsTotal.inc({ cache_type: cacheType });
-    cacheOperationsTotal.inc({ tier: "memory", operation: "get", status: "hit" });
+    cacheOperationsTotal.inc({
+      tier: "memory",
+      operation: "get",
+      status: "hit",
+    });
   },
 
   recordCacheMiss: (cacheType: string = "simulation") => {
     cacheMissesTotal.inc({ cache_type: cacheType });
-    cacheOperationsTotal.inc({ tier: "memory", operation: "get", status: "miss" });
+    cacheOperationsTotal.inc({
+      tier: "memory",
+      operation: "get",
+      status: "miss",
+    });
   },
 
   recordL1Hit: (cacheType: string = "simulation") => {
@@ -303,6 +330,14 @@ export const metrics = {
   recordFootprintEntries: (readOnly: number, readWrite: number) => {
     footprintEntriesHistogram.observe({ type: "read_only" }, readOnly);
     footprintEntriesHistogram.observe({ type: "read_write" }, readWrite);
+  },
+
+  /**
+   * Increment the hedged-request counter.
+   * @param result - "dispatched" when a hedge is fired; "won" when it resolves first.
+   */
+  recordHedgedRequest: (result: "dispatched" | "won") => {
+    rpcHedgedRequestsTotal.inc({ result });
   },
 
   getMetrics: async (): Promise<string> => {

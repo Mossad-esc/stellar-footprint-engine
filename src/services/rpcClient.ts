@@ -1,6 +1,13 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { getRpcServer, Network } from "../config/stellar";
+import {
+  ErrorCode,
+  RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT,
+  RPC_MAX_PAYLOAD_BYTES,
+  RPC_PAYLOAD_WARN_BYTES,
+} from "../constants";
+import metrics from "../middleware/metrics";
 import { logger } from "../utils/logger";
 import {
   isTransientError,
@@ -8,6 +15,11 @@ import {
   RETRYABLE_HTTP_STATUSES,
   RPC_MAX_RETRIES,
 } from "../utils/retry";
+
+// ---------------------------------------------------------------------------
+// Adaptive Request Hedging — configurable delay (ms) before firing a backup
+// ---------------------------------------------------------------------------
+export const HEDGE_DELAY_MS = parseInt(process.env.HEDGE_DELAY_MS ?? "600", 10);
 
 // ---------------------------------------------------------------------------
 // #40 — RPC pool stats tracking
@@ -506,6 +518,156 @@ export async function simulateViaRpc(
   }
 
   throw lastError;
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive Request Hedging (#hedging)
+// ---------------------------------------------------------------------------
+
+export interface HedgeOptions {
+  /** Override the primary RPC URL (defaults to selectRpcEndpoint). */
+  primaryUrl?: string;
+  /** Override the secondary/backup RPC URL (defaults to selectRpcEndpoint). */
+  secondaryUrl?: string;
+  /** Override the hedge delay in ms (defaults to HEDGE_DELAY_MS env var or 600). */
+  hedgeDelayMs?: number;
+}
+
+/**
+ * Simulate a transaction with adaptive request hedging.
+ *
+ * Dispatches the request to the primary RPC node immediately.  If no response
+ * arrives within `hedgeDelayMs` (default 600 ms) a speculative duplicate
+ * ("hedged") request is sent to a secondary node.  Whichever resolves first is
+ * returned; the slower one is cancelled via AbortController so it cannot leak
+ * memory or cause unhandled rejections.
+ *
+ * Prometheus counters:
+ *   rpc_hedged_requests_total{result="dispatched"} — hedge was fired.
+ *   rpc_hedged_requests_total{result="won"}        — hedge resolved first.
+ */
+export async function hedgedSimulate(
+  tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction,
+  network: Network,
+  options: HedgeOptions = {},
+): Promise<StellarSdk.rpc.Api.SimulateTransactionResponse> {
+  const delayMs = options.hedgeDelayMs ?? HEDGE_DELAY_MS;
+
+  // Resolve endpoint URLs
+  const primaryUrl = options.primaryUrl ?? selectRpcEndpoint(network);
+  const getSecondaryUrl = () =>
+    options.secondaryUrl ?? selectRpcEndpoint(network);
+
+  const primaryAbort = new AbortController();
+  const secondaryAbort = new AbortController();
+
+  // Helper: run a simulate call against a specific URL (or fall back to default
+  // server when no URL is available).
+  function runSimulate(
+    url: string | undefined,
+    signal: AbortSignal,
+  ): Promise<StellarSdk.rpc.Api.SimulateTransactionResponse> {
+    const server = url ? new StellarSdk.rpc.Server(url) : getRpcServer(network);
+    return server
+      .simulateTransaction(tx, { signal } as never)
+      .then(guardPayloadSize);
+  }
+
+  // 1. Start the primary request immediately.
+  const primaryStartedAt = Date.now();
+  const primaryPromise = runSimulate(primaryUrl, primaryAbort.signal).then(
+    (res) => {
+      if (primaryUrl) {
+        recordEndpointResult(
+          network,
+          primaryUrl,
+          Date.now() - primaryStartedAt,
+          false,
+        );
+      }
+      return res;
+    },
+    (err) => {
+      if (primaryUrl && !primaryAbort.signal.aborted) {
+        recordEndpointResult(
+          network,
+          primaryUrl,
+          Date.now() - primaryStartedAt,
+          true,
+        );
+      }
+      return Promise.reject(err);
+    },
+  );
+
+  // 2. After delayMs, dispatch a speculative backup request.
+  let hedgeTimerId: ReturnType<typeof setTimeout> | undefined;
+
+  const hedgedPromise =
+    new Promise<StellarSdk.rpc.Api.SimulateTransactionResponse>(
+      (resolve, reject) => {
+        hedgeTimerId = setTimeout(() => {
+          // Track that a hedge was fired.
+          metrics.recordHedgedRequest("dispatched");
+
+          const secondaryUrl = getSecondaryUrl();
+          const secondaryStartedAt = Date.now();
+
+          runSimulate(secondaryUrl, secondaryAbort.signal).then(
+            (res) => {
+              if (secondaryUrl) {
+                recordEndpointResult(
+                  network,
+                  secondaryUrl,
+                  Date.now() - secondaryStartedAt,
+                  false,
+                );
+              }
+              resolve(res);
+            },
+            (err) => {
+              if (secondaryUrl && !secondaryAbort.signal.aborted) {
+                recordEndpointResult(
+                  network,
+                  secondaryUrl,
+                  Date.now() - secondaryStartedAt,
+                  true,
+                );
+              }
+              reject(err);
+            },
+          );
+        }, delayMs);
+
+        // If primary completes before the timer fires, cancel the timer so we
+        // never fire an unnecessary hedge.
+        primaryPromise.then(
+          () => clearTimeout(hedgeTimerId),
+          () => clearTimeout(hedgeTimerId),
+        );
+      },
+    );
+
+  // 3. Race both: whichever resolves first wins.
+  return Promise.race([
+    primaryPromise.then((result) => {
+      // Primary won — cancel any in-flight hedge.
+      secondaryAbort.abort();
+      return result;
+    }),
+    hedgedPromise.then((result) => {
+      // Hedge won — cancel the slower primary.
+      primaryAbort.abort();
+      metrics.recordHedgedRequest("won");
+      return result;
+    }),
+  ]).catch((err) => {
+    // Ensure both sides are cleaned up before re-throwing.
+    primaryAbort.abort();
+    secondaryAbort.abort();
+    if (hedgeTimerId !== undefined) clearTimeout(hedgeTimerId);
+    throw err;
+  });
 }
 
 /**
