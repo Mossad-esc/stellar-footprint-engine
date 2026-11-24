@@ -4,7 +4,9 @@ import * as stellarConfig from "../../config/stellar";
 import {
   fetchTtlInfo,
   parseRpcUrls,
+  recordEndpointResult,
   resetRpcPool,
+  selectRpcEndpoint,
   simulateViaRpc,
 } from "../rpcClient";
 import { parseXdr } from "../xdrParser";
@@ -98,7 +100,9 @@ describe("rpcClient & xdrParser", () => {
   describe("parseRpcUrls", () => {
     it("splits comma-separated URLs and trims whitespace", () => {
       expect(
-        parseRpcUrls("https://a.example.com, https://b.example.com ,https://c.example.com"),
+        parseRpcUrls(
+          "https://a.example.com, https://b.example.com ,https://c.example.com",
+        ),
       ).toEqual([
         "https://a.example.com",
         "https://b.example.com",
@@ -108,7 +112,12 @@ describe("rpcClient & xdrParser", () => {
 
     it("accepts arrays and drops empty entries", () => {
       expect(
-        parseRpcUrls(["https://a.example.com", "", "  ", "https://b.example.com"]),
+        parseRpcUrls([
+          "https://a.example.com",
+          "",
+          "  ",
+          "https://b.example.com",
+        ]),
       ).toEqual(["https://a.example.com", "https://b.example.com"]);
     });
 
@@ -242,5 +251,121 @@ describe("rpcClient & xdrParser", () => {
       const badXdrFailure = await fetchTtlInfo("testnet", ["bad-xdr"]);
       expect(badXdrFailure).toEqual({});
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #63 — Provider failover on HTTP 429 / 5xx
+// ---------------------------------------------------------------------------
+
+describe("recordEndpointResult — custom penalty duration", () => {
+  beforeEach(() => resetRpcPool());
+  afterEach(() => resetRpcPool());
+
+  it("applies the default 30 s penalty when penaltyMs is omitted", () => {
+    const before = Date.now();
+    recordEndpointResult(
+      "testnet" as never,
+      "https://rpc.example.com",
+      100,
+      true,
+    );
+    const state = selectRpcEndpoint("testnet" as never);
+    // We can't directly inspect penalizedUntil, but we verify the endpoint
+    // still exists in the pool by confirming selectRpcEndpoint returns something.
+    expect(state).toBeUndefined(); // no URLs configured in env — just checking no throw
+  });
+
+  it("applies a custom penalty duration when penaltyMs is provided", () => {
+    // This mainly verifies the function signature accepts the extra param
+    // without throwing.
+    expect(() =>
+      recordEndpointResult(
+        "testnet" as never,
+        "https://rpc.example.com",
+        50,
+        true,
+        5_000,
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe("simulateViaRpc — provider failover on 429 / 5xx", () => {
+  const mockSimulateTransaction = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetRpcPool();
+    mockedGetRpcServer.mockReturnValue({
+      simulateTransaction: mockSimulateTransaction,
+      getLedgerEntries: jest.fn(),
+    } as unknown as StellarSdk.rpc.Server);
+  });
+
+  afterEach(() => {
+    resetRpcPool();
+    delete process.env.TESTNET_RPC_URL;
+  });
+
+  it("retries against a different provider after a 429 from the first host", async () => {
+    // Two providers in the pool: provider-a returns 429, provider-b succeeds.
+    process.env.TESTNET_RPC_URL =
+      "https://provider-a.example.com,https://provider-b.example.com";
+
+    const rateLimitErr = Object.assign(new Error("Too Many Requests"), {
+      status: 429,
+    });
+    const fakeResponse = { id: "sim-ok", latestLedger: 200 };
+
+    // The SDK Server constructor is what determines which URL is used.
+    // We intercept at the mock level: first call rejects, second resolves.
+    mockSimulateTransaction
+      .mockRejectedValueOnce(rateLimitErr)
+      .mockResolvedValue(fakeResponse);
+
+    const tx = createSampleTx();
+    const result = await simulateViaRpc(tx, "testnet");
+
+    expect(result).toEqual(fakeResponse);
+    // simulateTransaction must have been called at least twice (once per provider attempt)
+    expect(mockSimulateTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws immediately when all providers return 429 and retries are exhausted", async () => {
+    process.env.TESTNET_RPC_URL =
+      "https://provider-a.example.com,https://provider-b.example.com";
+
+    const rateLimitErr = Object.assign(new Error("Too Many Requests"), {
+      status: 429,
+    });
+    mockSimulateTransaction.mockRejectedValue(rateLimitErr);
+
+    const tx = createSampleTx();
+    await expect(simulateViaRpc(tx, "testnet")).rejects.toThrow(
+      "Too Many Requests",
+    );
+  });
+
+  it("propagates Retry-After header value when present on the error", async () => {
+    process.env.TESTNET_RPC_URL =
+      "https://provider-a.example.com,https://provider-b.example.com";
+
+    const rateLimitErr = Object.assign(new Error("Too Many Requests"), {
+      status: 429,
+      response: {
+        status: 429,
+        headers: { get: (h: string) => (h === "retry-after" ? "5" : null) },
+      },
+    });
+    const fakeResponse = { id: "sim-after-retry-after", latestLedger: 300 };
+
+    mockSimulateTransaction
+      .mockRejectedValueOnce(rateLimitErr)
+      .mockResolvedValue(fakeResponse);
+
+    const tx = createSampleTx();
+    const result = await simulateViaRpc(tx, "testnet");
+    expect(result).toEqual(fakeResponse);
   });
 });

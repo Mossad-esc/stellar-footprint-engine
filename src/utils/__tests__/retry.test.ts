@@ -333,3 +333,87 @@ describe("withRetry", () => {
     jest.restoreAllMocks();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #63 — RETRYABLE_HTTP_STATUSES and parseRetryAfterMs
+// ---------------------------------------------------------------------------
+
+describe("RETRYABLE_HTTP_STATUSES", () => {
+  it("contains 429, 502, 503, and 504", () => {
+    expect(RETRYABLE_HTTP_STATUSES.has(429)).toBe(true);
+    expect(RETRYABLE_HTTP_STATUSES.has(502)).toBe(true);
+    expect(RETRYABLE_HTTP_STATUSES.has(503)).toBe(true);
+    expect(RETRYABLE_HTTP_STATUSES.has(504)).toBe(true);
+  });
+
+  it("does not contain non-retryable codes like 400 or 500", () => {
+    expect(RETRYABLE_HTTP_STATUSES.has(400)).toBe(false);
+    expect(RETRYABLE_HTTP_STATUSES.has(500)).toBe(false);
+    expect(RETRYABLE_HTTP_STATUSES.has(200)).toBe(false);
+  });
+});
+
+describe("isTransientError — HTTP status codes", () => {
+  it("returns true for HTTP 429", () => {
+    const err = Object.assign(new Error("Too Many Requests"), { status: 429 });
+    expect(isTransientError(err)).toBe(true);
+  });
+
+  it("returns true for HTTP 502", () => {
+    const err = Object.assign(new Error("Bad Gateway"), { status: 502 });
+    expect(isTransientError(err)).toBe(true);
+  });
+
+  it("returns true for HTTP 503", () => {
+    const err = Object.assign(new Error("Service Unavailable"), {
+      status: 503,
+    });
+    expect(isTransientError(err)).toBe(true);
+  });
+
+  it("returns true for HTTP 504", () => {
+    const err = Object.assign(new Error("Gateway Timeout"), { status: 504 });
+    expect(isTransientError(err)).toBe(true);
+  });
+
+  it("returns false for HTTP 400", () => {
+    const err = Object.assign(new Error("Bad Request"), { status: 400 });
+    expect(isTransientError(err)).toBe(false);
+  });
+
+  it("returns false for HTTP 500 (not in retryable set)", () => {
+    const err = Object.assign(new Error("Internal Server Error"), {
+      status: 500,
+    });
+    expect(isTransientError(err)).toBe(false);
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  it("parses a numeric seconds string", () => {
+    expect(parseRetryAfterMs("30")).toBe(30_000);
+    expect(parseRetryAfterMs("0")).toBe(0);
+    expect(parseRetryAfterMs("60")).toBe(60_000);
+  });
+
+  it("clamps numeric values to 300 000 ms (5 minutes)", () => {
+    expect(parseRetryAfterMs("9999")).toBe(300_000);
+  });
+
+  it("parses an HTTP-date string", () => {
+    const future = new Date(Date.now() + 10_000).toUTCString();
+    const result = parseRetryAfterMs(future);
+    expect(result).toBeDefined();
+    expect(result!).toBeGreaterThan(0);
+    expect(result!).toBeLessThanOrEqual(300_000);
+  });
+
+  it("returns undefined for undefined or null input", () => {
+    expect(parseRetryAfterMs(undefined)).toBeUndefined();
+    expect(parseRetryAfterMs(null)).toBeUndefined();
+  });
+
+  it("returns undefined for an unparseable string", () => {
+    expect(parseRetryAfterMs("not-a-date-or-number")).toBeUndefined();
+  });
+});
