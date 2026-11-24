@@ -3,6 +3,7 @@ import * as StellarSdk from "@stellar/stellar-sdk";
 import * as stellarConfig from "../../config/stellar";
 import {
   fetchTtlInfo,
+  guardPayloadSize,
   parseRpcUrls,
   resetRpcPool,
   simulateViaRpc,
@@ -98,7 +99,9 @@ describe("rpcClient & xdrParser", () => {
   describe("parseRpcUrls", () => {
     it("splits comma-separated URLs and trims whitespace", () => {
       expect(
-        parseRpcUrls("https://a.example.com, https://b.example.com ,https://c.example.com"),
+        parseRpcUrls(
+          "https://a.example.com, https://b.example.com ,https://c.example.com",
+        ),
       ).toEqual([
         "https://a.example.com",
         "https://b.example.com",
@@ -108,7 +111,12 @@ describe("rpcClient & xdrParser", () => {
 
     it("accepts arrays and drops empty entries", () => {
       expect(
-        parseRpcUrls(["https://a.example.com", "", "  ", "https://b.example.com"]),
+        parseRpcUrls([
+          "https://a.example.com",
+          "",
+          "  ",
+          "https://b.example.com",
+        ]),
       ).toEqual(["https://a.example.com", "https://b.example.com"]);
     });
 
@@ -242,5 +250,78 @@ describe("rpcClient & xdrParser", () => {
       const badXdrFailure = await fetchTtlInfo("testnet", ["bad-xdr"]);
       expect(badXdrFailure).toEqual({});
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #65 — guardPayloadSize unit tests
+// ---------------------------------------------------------------------------
+
+describe("guardPayloadSize", () => {
+  // Minimal simulate response shape accepted by the guard
+  function makeResponse(
+    overrides: Record<string, unknown> = {},
+  ): StellarSdk.rpc.Api.SimulateTransactionResponse {
+    return {
+      latestLedger: 100,
+      minResourceFee: "1000",
+      transactionData: "",
+      events: [],
+      ...overrides,
+    } as unknown as StellarSdk.rpc.Api.SimulateTransactionResponse;
+  }
+
+  it("returns the response unchanged when it is below the warn threshold", () => {
+    const response = makeResponse();
+    expect(guardPayloadSize(response)).toBe(response);
+  });
+
+  it("throws with RPC_PAYLOAD_TOO_LARGE when payload exceeds the max limit", () => {
+    // Build a response whose JSON exceeds RPC_MAX_PAYLOAD_BYTES (10 MB)
+    const bigEvents = Array.from({ length: 200_000 }, (_, i) => ({
+      id: `event-${i}`,
+      data: "x".repeat(60),
+    }));
+    const response = makeResponse({ events: bigEvents });
+
+    expect(() => guardPayloadSize(response)).toThrow(/payload too large/i);
+    try {
+      guardPayloadSize(response);
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("RPC_PAYLOAD_TOO_LARGE");
+    }
+  });
+
+  it("truncates events and returns a new response object when payload exceeds the warn threshold but is under the hard limit", () => {
+    // Build a response whose JSON is > 2 MB but < 10 MB
+    // 60 events × 40 KB each ≈ 2.4 MB
+    const bigEvents = Array.from({ length: 60 }, (_, i) => ({
+      id: `event-${i}`,
+      data: "x".repeat(40_000),
+    }));
+    const response = makeResponse({ events: bigEvents });
+    const result = guardPayloadSize(response);
+
+    // Should have been truncated to RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT (50)
+    expect(
+      (result as unknown as { events: unknown[] }).events.length,
+    ).toBeLessThanOrEqual(50);
+    // Essential footprint fields must be preserved
+    expect(result.latestLedger).toBe(100);
+    expect(result.minResourceFee).toBe("1000");
+  });
+
+  it("does not truncate events when count is already within the limit", () => {
+    // 10 events × 40 KB each ≈ 400 KB (above 2 MB threshold only if padded)
+    // We simulate a payload just above warn threshold with few events
+    const bigEvents = Array.from({ length: 10 }, (_, i) => ({
+      id: `event-${i}`,
+      data: "x".repeat(220_000), // ~2.2 MB total
+    }));
+    const response = makeResponse({ events: bigEvents });
+    const result = guardPayloadSize(response);
+
+    // 10 events is under the truncation limit of 50 so the array stays intact
+    expect((result as unknown as { events: unknown[] }).events.length).toBe(10);
   });
 });

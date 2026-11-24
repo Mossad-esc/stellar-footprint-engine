@@ -1,6 +1,13 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { getRpcServer, Network } from "../config/stellar";
+import {
+  ErrorCode,
+  RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT,
+  RPC_MAX_PAYLOAD_BYTES,
+  RPC_PAYLOAD_WARN_BYTES,
+} from "../constants";
+import { logger } from "../utils/logger";
 
 // ---------------------------------------------------------------------------
 // #40 — RPC pool stats tracking
@@ -219,6 +226,59 @@ export function resetRpcPool(): void {
   endpointPool.clear();
 }
 
+// ---------------------------------------------------------------------------
+// #65 — RPC response payload size limiter
+// ---------------------------------------------------------------------------
+
+/**
+ * Measure the serialised byte length of a value using a TextEncoder so that
+ * multi-byte characters are counted correctly.
+ */
+function byteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+/**
+ * Guard a simulate-transaction response against oversized payloads.
+ *
+ * - Rejects with ErrorCode.RPC_PAYLOAD_TOO_LARGE when the serialised response
+ *   exceeds RPC_MAX_PAYLOAD_BYTES (default 10 MB).
+ * - Truncates diagnostic events and emits a warning when the payload exceeds
+ *   RPC_PAYLOAD_WARN_BYTES (default 2 MB) but stays under the hard limit.
+ */
+export function guardPayloadSize(
+  response: StellarSdk.rpc.Api.SimulateTransactionResponse,
+): StellarSdk.rpc.Api.SimulateTransactionResponse {
+  const size = byteLength(response);
+
+  if (size > RPC_MAX_PAYLOAD_BYTES) {
+    const err = Object.assign(
+      new Error(
+        `RPC response payload too large: ${size} bytes exceeds the ${RPC_MAX_PAYLOAD_BYTES}-byte limit`,
+      ),
+      { code: ErrorCode.RPC_PAYLOAD_TOO_LARGE },
+    );
+    throw err;
+  }
+
+  if (size > RPC_PAYLOAD_WARN_BYTES) {
+    logger.warn(
+      { payloadBytes: size, warnThresholdBytes: RPC_PAYLOAD_WARN_BYTES },
+      "RPC response payload exceeds warn threshold; truncating diagnostic events",
+    );
+
+    const events = (response as unknown as { events?: unknown[] }).events ?? [];
+    if (events.length > RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT) {
+      return {
+        ...response,
+        events: events.slice(0, RPC_DIAGNOSTIC_EVENT_TRUNCATION_LIMIT),
+      } as StellarSdk.rpc.Api.SimulateTransactionResponse;
+    }
+  }
+
+  return response;
+}
+
 /**
  * Sanitize a URL by masking credentials and sensitive query parameters.
  * - Masks basic-auth user:pass in the URL authority.
@@ -336,7 +396,9 @@ export async function simulateViaRpc(
   const selectedUrl = selectRpcEndpoint(network);
   if (!selectedUrl) {
     const server = getRpcServer(network);
-    return server.simulateTransaction(tx, simOptions as never);
+    return guardPayloadSize(
+      await server.simulateTransaction(tx, simOptions as never),
+    );
   }
 
   const server = new StellarSdk.rpc.Server(selectedUrl);
@@ -344,7 +406,7 @@ export async function simulateViaRpc(
   try {
     const response = await server.simulateTransaction(tx, simOptions as never);
     recordEndpointResult(network, selectedUrl, Date.now() - startedAt, false);
-    return response;
+    return guardPayloadSize(response);
   } catch (error) {
     recordEndpointResult(network, selectedUrl, Date.now() - startedAt, true);
     throw error;
