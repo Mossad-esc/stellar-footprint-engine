@@ -3,13 +3,13 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-  "forwardPorts": [3000, "redis:6379"],
+  "forwardPorts": [3000, 6379],
   "portsAttributes": {
     "3000": {
       "label": "API Server",
       "onAutoForward": "notify"
     },
-    "redis:6379": {
+    "6379": {
       "label": "Redis",
       "onAutoForward": "silent"
     }
