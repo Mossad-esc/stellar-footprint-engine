@@ -2,19 +2,19 @@
   "name": "Stellar Footprint Engine",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
-  "workspaceFolder": "/workspace",
-  "forwardPorts": [3000, 6379],
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "forwardPorts": [3000, "redis:6379"],
   "portsAttributes": {
     "3000": {
       "label": "API Server",
       "onAutoForward": "notify"
     },
-    "6379": {
+    "redis:6379": {
       "label": "Redis",
       "onAutoForward": "silent"
     }
   },
-  "postCreateCommand": "pnpm install && cp .env.example .env",
+  "postCreateCommand": "pnpm install && cp -n .env.example .env || true",
   "customizations": {
     "vscode": {
       "extensions": [
