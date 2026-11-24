@@ -31,6 +31,7 @@ import {
   failJob,
   getJob,
   InvalidWebhookUrlError,
+  retryDeadLetter,
 } from "@services/webhook";
 import { AppError } from "@utils/AppError";
 import { rpcCircuitBreaker } from "@utils/circuitBreaker";
@@ -200,6 +201,22 @@ export async function simulate(
 
   const net: Network = (network as Network) || DEFAULT_NETWORK;
 
+  // maxLedgerAge from query param or Cache-Control: max-age-ledgers=N
+  let maxLedgerAge: number | undefined;
+  const maxLedgerAgeQuery = (req.query.maxLedgerAge as string) || "";
+  if (maxLedgerAgeQuery !== "") {
+    const parsed = parseInt(maxLedgerAgeQuery, 10);
+    if (!isNaN(parsed) && parsed > 0) maxLedgerAge = parsed;
+  }
+  if (maxLedgerAge === undefined) {
+    const cacheControl = (req.headers["cache-control"] as string) || "";
+    const match = cacheControl.match(/max-age-ledgers=(\d+)/);
+    if (match) {
+      const parsed = parseInt(match[1], 10);
+      if (!isNaN(parsed) && parsed > 0) maxLedgerAge = parsed;
+    }
+  }
+
   if (webhookUrl !== undefined) {
     if (typeof webhookUrl !== "string") {
       return next(
@@ -229,7 +246,7 @@ export async function simulate(
       // ignore — never block the request for a metrics failure
     }
 
-    void simulateTransaction(xdrValue, net, undefined, ledgerSequence)
+    void simulateTransaction(xdrValue, net, undefined, ledgerSequence, maxLedgerAge)
       .then((result) => {
         const duration = (Date.now() - start) / 1000;
         metrics.recordSimulation(net, result.success);
@@ -268,6 +285,7 @@ export async function simulate(
       net,
       res.locals.abortSignal,
       ledgerSequence,
+      maxLedgerAge,
     );
     const duration = (Date.now() - start) / 1000;
     metrics.recordSimulation(net, result.success);
@@ -1265,4 +1283,45 @@ export function rpcStatus(
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
   }
+}
+
+// ---------------------------------------------------------------------------
+// POST /simulate/jobs/:jobId/retry — manually redeliver a dead-lettered webhook
+// ---------------------------------------------------------------------------
+
+export async function retrySimulationJob(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const { jobId } = req.params as { jobId?: string };
+
+  if (!jobId) {
+    return next(new AppError("Webhook job not found", HTTP_STATUS.NOT_FOUND));
+  }
+
+  const job = getJob(jobId);
+  if (!job) {
+    return next(new AppError("Webhook job not found", HTTP_STATUS.NOT_FOUND));
+  }
+
+  const retried = await retryDeadLetter(jobId);
+  if (!retried) {
+    return next(
+      new AppError(
+        "Only dead-lettered jobs can be retried",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+
+  res.status(HTTP_STATUS.OK).json({
+    success: true,
+    data: {
+      jobId,
+      status: "pending",
+      deliveryStatus: "pending",
+      message: "Webhook redelivery scheduled",
+    },
+  });
 }

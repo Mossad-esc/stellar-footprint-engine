@@ -110,6 +110,17 @@ export async function getNetworkStatus(
   return result;
 }
 
+/**
+ * Returns the latest ledger sequence for the given network.
+ * Uses the cached network status when available, otherwise fetches fresh.
+ */
+export async function getLatestLedger(
+  network: Network = "testnet",
+): Promise<number> {
+  const status = await getNetworkStatus(network);
+  return status.ledger;
+}
+
 // ---------------------------------------------------------------------------
 // Issue #25 — Ledger-close event broadcasting for WebSocket subscribers
 // ---------------------------------------------------------------------------

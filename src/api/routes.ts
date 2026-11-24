@@ -15,6 +15,7 @@ import {
   simulateBatch,
   simulateBatchStream,
   getSimulationJob,
+  retrySimulationJob,
   footprintDiffController,
   validate,
   networkStatus,
@@ -61,6 +62,9 @@ router.get("/simulate/history", getSimulateHistory);
 
 // GET /simulate/jobs/:jobId — inspect async webhook simulation delivery status
 router.get("/simulate/jobs/:jobId", getSimulationJob);
+
+// POST /simulate/jobs/:jobId/retry — manually redeliver a dead-lettered webhook
+router.post("/simulate/jobs/:jobId/retry", retrySimulationJob);
 
 // POST /simulate/batch/dag — dependency-graph-aware batch simulation with topological execution
 router.post("/simulate/batch/dag", simulateDependentBatchController);
