@@ -9,6 +9,9 @@ const RETRYABLE_CODES = new Set([
   "ENETUNREACH",
 ]);
 
+/** HTTP status codes that indicate a transient server-side condition */
+const RETRYABLE_HTTP_STATUSES = new Set([503]);
+
 /** Patterns in error messages that indicate a transient network issue */
 const RETRYABLE_MESSAGE_PATTERNS = [
   /network.*timeout/i,
@@ -37,6 +40,7 @@ export function isTransientError(err: unknown): boolean {
 
   const msg = err.message ?? "";
   const code = (err as NodeJS.ErrnoException).code ?? "";
+  const status = (err as { status?: number }).status;
 
   // Never retry simulation/validation errors
   if (NON_RETRYABLE_MESSAGE_PATTERNS.some((p) => p.test(msg))) return false;
@@ -44,12 +48,39 @@ export function isTransientError(err: unknown): boolean {
   // Retry on known error codes
   if (RETRYABLE_CODES.has(code)) return true;
 
+  // Retry on retryable HTTP status codes
+  if (typeof status === "number" && RETRYABLE_HTTP_STATUSES.has(status))
+    return true;
+
   // Retry on known transient message patterns
   return RETRYABLE_MESSAGE_PATTERNS.some((p) => p.test(msg));
 }
 
+// ---------------------------------------------------------------------------
+// Full-Jitter Exponential Backoff (AWS Architecture standard)
+// sleep = random_between(0, min(cap, base * factor ** attempt))
+// ---------------------------------------------------------------------------
+
+export interface RetryOptions {
+  /** Maximum number of retry attempts (not counting the initial call). Default: 3 */
+  maxRetries?: number;
+  /** Base delay in milliseconds. Default: 100 */
+  initialDelayMs?: number;
+  /** Upper bound on the computed delay (the "cap"). Default: 30 000 */
+  maxDelayMs?: number;
+  /** Exponential growth factor applied per attempt. Default: 2 */
+  factor?: number;
+  /**
+   * Predicate that decides whether a given error is worth retrying.
+   * Defaults to `isTransientError`.
+   */
+  isRetryable?: (err: unknown) => boolean;
+}
+
 const DEFAULT_MAX_RETRIES = 3;
-const BASE_DELAY_MS = 100;
+const DEFAULT_INITIAL_DELAY_MS = 100;
+const DEFAULT_MAX_DELAY_MS = 30_000;
+const DEFAULT_FACTOR = 2;
 
 const parsedMaxRetries = parseInt(
   process.env.RPC_MAX_RETRIES ?? String(DEFAULT_MAX_RETRIES),
@@ -60,37 +91,71 @@ export const RPC_MAX_RETRIES = Number.isFinite(parsedMaxRetries)
   : DEFAULT_MAX_RETRIES;
 
 /**
- * Executes `fn` with exponential backoff retry for transient RPC errors.
- * Delays: 100ms, 200ms, 400ms (doubles each attempt).
- * Never retries simulation or validation errors.
+ * Compute the full-jitter sleep duration for a given attempt.
+ * Returns a value uniformly distributed in [0, min(cap, base * factor^attempt)].
+ */
+export function fullJitterDelay(
+  attempt: number,
+  initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
+  maxDelayMs = DEFAULT_MAX_DELAY_MS,
+  factor = DEFAULT_FACTOR,
+): number {
+  const cap = Math.min(maxDelayMs, initialDelayMs * Math.pow(factor, attempt));
+  return Math.random() * cap;
+}
+
+/**
+ * Executes `fn` with Full-Jitter exponential backoff for transient RPC errors.
+ *
+ * Sleep between retries:
+ *   sleep = random_between(0, min(maxDelayMs, initialDelayMs * factor ** attempt))
+ *
+ * Never retries simulation or validation errors (governed by `isRetryable`).
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   context = "rpc",
   maxRetries = RPC_MAX_RETRIES,
+  options: RetryOptions = {},
 ): Promise<T> {
+  const {
+    initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
+    maxDelayMs = DEFAULT_MAX_DELAY_MS,
+    factor = DEFAULT_FACTOR,
+    isRetryable = isTransientError,
+  } = options;
+
+  // maxRetries can also come from options; the positional param takes precedence
+  // to preserve backward-compatible call sites that pass it directly.
+  const resolvedMaxRetries = options.maxRetries ?? maxRetries;
+
   let lastError: unknown;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  for (let attempt = 0; attempt <= resolvedMaxRetries; attempt++) {
     try {
       return await fn();
     } catch (err) {
       lastError = err;
 
-      if (attempt >= maxRetries || !isTransientError(err)) {
+      if (attempt >= resolvedMaxRetries || !isRetryable(err)) {
         throw err;
       }
 
-      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+      const delayMs = fullJitterDelay(
+        attempt,
+        initialDelayMs,
+        maxDelayMs,
+        factor,
+      );
       logger.warn(
         {
           context,
           attempt: attempt + 1,
-          maxRetries,
-          delayMs,
+          maxRetries: resolvedMaxRetries,
+          delayMs: Math.round(delayMs),
           error: (err as Error).message,
         },
-        `Transient RPC error on attempt ${attempt + 1}/${maxRetries}, retrying in ${delayMs}ms`,
+        `Transient RPC error on attempt ${attempt + 1}/${resolvedMaxRetries}, retrying in ${Math.round(delayMs)}ms`,
       );
 
       await new Promise((resolve) => setTimeout(resolve, delayMs));
