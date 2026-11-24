@@ -1,6 +1,13 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { getRpcServer, Network } from "../config/stellar";
+import { logger } from "../utils/logger";
+import {
+  isTransientError,
+  parseRetryAfterMs,
+  RETRYABLE_HTTP_STATUSES,
+  RPC_MAX_RETRIES,
+} from "../utils/retry";
 
 // ---------------------------------------------------------------------------
 // #40 — RPC pool stats tracking
@@ -198,6 +205,7 @@ export function recordEndpointResult(
   url: string,
   latencyMs: number,
   failed: boolean,
+  penaltyMs?: number,
 ): void {
   const state = getOrCreateEndpoint(network, url);
   state.latencies.push(latencyMs);
@@ -205,9 +213,10 @@ export function recordEndpointResult(
     state.latencies.shift();
   }
   if (failed) {
-    state.penalizedUntil = Date.now() + PENALTY_TTL_MS;
+    const duration = penaltyMs ?? PENALTY_TTL_MS;
+    state.penalizedUntil = Date.now() + duration;
     debugLog(
-      `network=${network} penalized=${sanitizeRpcUrl(url)} for ${PENALTY_TTL_MS}ms`,
+      `network=${network} penalized=${sanitizeRpcUrl(url)} for ${duration}ms`,
     );
   }
 }
@@ -319,8 +328,47 @@ export function getRpcStats(): RpcEndpointStats[] {
     });
 }
 
+// ---------------------------------------------------------------------------
+// #63 — Automatic provider failover on HTTP 429 and 5xx
+// ---------------------------------------------------------------------------
+
 /**
- * Simulate a transaction via RPC
+ * Extract the HTTP status code and Retry-After header value from an error
+ * thrown by the Stellar SDK or a raw fetch response.
+ */
+function extractHttpInfo(err: unknown): {
+  status: number | undefined;
+  retryAfter: string | undefined;
+} {
+  if (!(err instanceof Error))
+    return { status: undefined, retryAfter: undefined };
+
+  const anyErr = err as {
+    status?: number;
+    response?: {
+      status?: number;
+      headers?: { get?: (h: string) => string | null };
+    };
+  };
+
+  const status = anyErr.status ?? anyErr.response?.status;
+  const retryAfter =
+    anyErr.response?.headers?.get?.("retry-after") ??
+    anyErr.response?.headers?.get?.("Retry-After") ??
+    undefined;
+
+  return { status, retryAfter: retryAfter ?? undefined };
+}
+
+/**
+ * Simulate a transaction via RPC with automatic provider failover.
+ *
+ * On HTTP 429 or 5xx (502/503/504):
+ *  1. Immediately back-off the failing host for the Retry-After duration
+ *     (or 30 s if the header is absent).
+ *  2. Re-route each retry attempt to the next available provider in the pool.
+ *
+ * Falls back to the default getRpcServer() when no pool URLs are configured.
  */
 export async function simulateViaRpc(
   tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction,
@@ -333,22 +381,76 @@ export async function simulateViaRpc(
     simOptions.ledger = ledgerSequence;
   }
 
-  const selectedUrl = selectRpcEndpoint(network);
-  if (!selectedUrl) {
+  // No pool configured — use the default server without failover logic.
+  const hasPool = getRpcUrls(network).length > 0;
+  if (!hasPool) {
     const server = getRpcServer(network);
     return server.simulateTransaction(tx, simOptions as never);
   }
 
-  const server = new StellarSdk.rpc.Server(selectedUrl);
-  const startedAt = Date.now();
-  try {
-    const response = await server.simulateTransaction(tx, simOptions as never);
-    recordEndpointResult(network, selectedUrl, Date.now() - startedAt, false);
-    return response;
-  } catch (error) {
-    recordEndpointResult(network, selectedUrl, Date.now() - startedAt, true);
-    throw error;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= RPC_MAX_RETRIES; attempt++) {
+    const selectedUrl = selectRpcEndpoint(network);
+    if (!selectedUrl) {
+      const server = getRpcServer(network);
+      return server.simulateTransaction(tx, simOptions as never);
+    }
+
+    const server = new StellarSdk.rpc.Server(selectedUrl);
+    const startedAt = Date.now();
+
+    try {
+      const response = await server.simulateTransaction(
+        tx,
+        simOptions as never,
+      );
+      recordEndpointResult(network, selectedUrl, Date.now() - startedAt, false);
+      return response;
+    } catch (error) {
+      lastError = error;
+      const latency = Date.now() - startedAt;
+      const { status, retryAfter } = extractHttpInfo(error);
+
+      const isRateOrServerError =
+        typeof status === "number" && RETRYABLE_HTTP_STATUSES.has(status);
+
+      if (isRateOrServerError) {
+        // Honour Retry-After when provided; default to 30 s.
+        const penaltyMs = parseRetryAfterMs(retryAfter) ?? PENALTY_TTL_MS;
+        recordEndpointResult(network, selectedUrl, latency, true, penaltyMs);
+
+        logger.warn(
+          {
+            network,
+            url: sanitizeRpcUrl(selectedUrl),
+            status,
+            penaltyMs,
+            attempt: attempt + 1,
+            maxRetries: RPC_MAX_RETRIES,
+          },
+          `RPC provider returned HTTP ${status}; backing off for ${penaltyMs}ms and failing over`,
+        );
+
+        if (attempt < RPC_MAX_RETRIES) {
+          // Advance to the next attempt immediately — selectRpcEndpoint will
+          // skip the penalized host automatically.
+          continue;
+        }
+      } else {
+        recordEndpointResult(
+          network,
+          selectedUrl,
+          latency,
+          !isTransientError(error),
+        );
+      }
+
+      throw error;
+    }
   }
+
+  throw lastError;
 }
 
 /**
