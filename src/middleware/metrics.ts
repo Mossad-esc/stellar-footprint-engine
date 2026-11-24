@@ -63,6 +63,35 @@ const cacheMissesTotal = new client.Counter({
   registers: [register],
 });
 
+// Tiered cache L1/L2 metrics (#47)
+const l1CacheHitsTotal = new client.Counter({
+  name: "cache_l1_hits_total",
+  help: "Total number of L1 cache hits",
+  labelNames: ["cache_type"],
+  registers: [register],
+});
+
+const l1CacheMissesTotal = new client.Counter({
+  name: "cache_l1_misses_total",
+  help: "Total number of L1 cache misses",
+  labelNames: ["cache_type"],
+  registers: [register],
+});
+
+const l2CacheHitsTotal = new client.Counter({
+  name: "cache_l2_hits_total",
+  help: "Total number of L2 cache hits",
+  labelNames: ["cache_type"],
+  registers: [register],
+});
+
+const l2CacheMissesTotal = new client.Counter({
+  name: "cache_l2_misses_total",
+  help: "Total number of L2 cache misses",
+  labelNames: ["cache_type"],
+  registers: [register],
+});
+
 const cacheOperationsTotal = new client.Counter({
   name: "cache_operations_total",
   help: "Total number of cache operations",
@@ -128,6 +157,19 @@ const footprintEntriesHistogram = new client.Histogram({
   registers: [register],
 });
 
+// Singleflight metrics (#48)
+const singleflightCoalescedTotal = new client.Counter({
+  name: "singleflight_coalesced_total",
+  help: "Total number of coalesced singleflight requests",
+  registers: [register],
+});
+
+const singleflightPendingGauge = new client.Gauge({
+  name: "singleflight_pending_total",
+  help: "Number of currently pending singleflight calls",
+  registers: [register],
+});
+
 // Middleware to track HTTP metrics
 export function metricsMiddleware(
   req: Request,
@@ -173,6 +215,30 @@ export const metrics = {
   recordCacheMiss: (cacheType: string = "simulation") => {
     cacheMissesTotal.inc({ cache_type: cacheType });
     cacheOperationsTotal.inc({ tier: "memory", operation: "get", status: "miss" });
+  },
+
+  recordL1Hit: (cacheType: string = "simulation") => {
+    l1CacheHitsTotal.inc({ cache_type: cacheType });
+  },
+
+  recordL1Miss: (cacheType: string = "simulation") => {
+    l1CacheMissesTotal.inc({ cache_type: cacheType });
+  },
+
+  recordL2Hit: (cacheType: string = "simulation") => {
+    l2CacheHitsTotal.inc({ cache_type: cacheType });
+  },
+
+  recordL2Miss: (cacheType: string = "simulation") => {
+    l2CacheMissesTotal.inc({ cache_type: cacheType });
+  },
+
+  recordSingleflightCoalesced: () => {
+    singleflightCoalescedTotal.inc();
+  },
+
+  recordSingleflightPending: (count: number) => {
+    singleflightPendingGauge.set(count);
   },
 
   recordCacheLatency: (
