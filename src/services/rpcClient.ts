@@ -410,3 +410,67 @@ export async function fetchTtlInfo(
     return {};
   }
 }
+
+/**
+ * Fetch contract TTL information by contract ID
+ */
+export async function fetchContractTtl(
+  network: Network,
+  contractId: string,
+): Promise<{
+  liveUntilLedger: number;
+  remainingLedgers: number;
+  estimatedExpirationDate: string | null;
+  currentLedger: number;
+} | null> {
+  const selectedUrl = selectRpcEndpoint(network);
+  const server = selectedUrl
+    ? new StellarSdk.rpc.Server(selectedUrl)
+    : getRpcServer(network);
+
+  try {
+    // Create contract instance ledger key
+    const contractInstanceKey = StellarSdk.xdr.LedgerKey.contractInstance(
+      new StellarSdk.xdr.ContractInstanceLedgerKey({
+        contract: StellarSdk.Address.fromString(contractId).toScAddress(),
+      }),
+    );
+
+    const startedAt = Date.now();
+    const response = await server.getLedgerEntries(contractInstanceKey);
+    if (selectedUrl) {
+      recordEndpointResult(network, selectedUrl, Date.now() - startedAt, false);
+    }
+
+    const currentLedger = response.latestLedger ?? 0;
+
+    if (response.entries && response.entries.length > 0) {
+      const entry = response.entries[0];
+      if (entry.liveUntilLedgerSeq) {
+        const liveUntilLedger = Number(entry.liveUntilLedgerSeq);
+        const remainingLedgers = liveUntilLedger - currentLedger;
+        const estimatedExpirationDate = new Date(
+          Date.now() + remainingLedgers * 5000, // 5 seconds per ledger
+        ).toISOString();
+
+        return {
+          liveUntilLedger,
+          remainingLedgers,
+          estimatedExpirationDate,
+          currentLedger,
+        };
+      }
+    }
+
+    return null;
+  } catch (error) {
+    if (selectedUrl) {
+      recordEndpointResult(network, selectedUrl, 0, true);
+    }
+    // If contract not found, return null
+    if (error instanceof Error && error.message.includes("not found")) {
+      return null;
+    }
+    throw error;
+  }
+}
