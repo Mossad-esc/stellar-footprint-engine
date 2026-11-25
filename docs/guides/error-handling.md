@@ -2,6 +2,9 @@
 
 This guide documents all error types, HTTP status codes, and error response shapes returned by the Stellar Footprint Service API. Use it to build robust retry and error-handling logic in your client.
 
+> 💡 **Encountering cryptic Soroban Host Errors?**  
+> For plain-English explanations, root-cause analyses, concrete remediation steps, and code snippets for errors like `HostError: Error(Storage, MissingValue)` or `HostError: Error(Budget, ExceededLimit)`, see the [Soroban Simulation Error Troubleshooting Handbook & FAQ](./error-troubleshooting-handbook.md).
+
 ## Response Envelope
 
 All API responses — success and error — use the same top-level envelope:
@@ -240,5 +243,6 @@ The `error` field in the response body will contain the translated message.
 
 ## Related
 
+- [Soroban Simulation Error Troubleshooting Handbook & FAQ](./error-troubleshooting-handbook.md)
 - [Rate Limiting Strategy — ADR 003](../adr/003-rate-limiting.md)
 - [OpenAPI Specification](../../openapi.yaml)

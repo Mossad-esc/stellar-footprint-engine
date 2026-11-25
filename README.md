@@ -949,6 +949,7 @@ export default router;
 | [Next.js dApp Integration Tutorial](./docs/tutorials/nextjs-dapp-integration.md) | End-to-end React/Next.js tutorial with Freighter Wallet and copy-pasteable `useSorobanSimulation` hook |
 | [Freighter Wallet Integration Guide](./docs/guides/wallet-integration.md) | Wiring up Freighter browser wallet with the simulate → sign → submit flow |
 | [Error Handling Guide](./docs/guides/error-handling.md) | Reference of error codes, HTTP status codes, response shapes, and retry strategies |
+| [Soroban Error Troubleshooting Handbook](./docs/guides/error-troubleshooting-handbook.md) | Comprehensive troubleshooting handbook mapping cryptic Soroban RPC host errors to plain-English fixes & FAQ |
 | [Caching Guide](./docs/guides/caching.md) | Redis vs in-memory dual-backend strategy, TTL configuration, and cache invalidation |
 | [Monitoring Guide](./docs/guides/monitoring.md) | Production Prometheus + Grafana setup, metrics, and alerting |
 | [Kubernetes Deployment Guide](./docs/guides/kubernetes.md) | Deploying and scaling the service on Kubernetes |
@@ -965,6 +966,8 @@ For details on the Redis vs in-memory dual-backend strategy, TTL configuration, 
 ## ⚠️ Error Handling Guide
 
 For a full reference of error codes, HTTP status codes, response shapes, and retry recommendations, see [docs/guides/error-handling.md](./docs/guides/error-handling.md).
+
+For an exhaustive dictionary mapping cryptic Soroban RPC host errors (storage errors, resource limits, auth traps, archival) to root-cause explanations and practical code fixes, consult the [Soroban Error Troubleshooting Handbook & FAQ](./docs/guides/error-troubleshooting-handbook.md).
 
 ## 📊 Monitoring Guide
 
