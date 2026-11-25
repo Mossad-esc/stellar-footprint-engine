@@ -1,9 +1,12 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import * as stellarConfig from "../../config/stellar";
+import metrics from "../../middleware/metrics";
 import {
   fetchTtlInfo,
   guardPayloadSize,
+  HEDGE_DELAY_MS,
+  hedgedSimulate,
   parseRpcUrls,
   recordEndpointResult,
   resetRpcPool,
@@ -368,5 +371,165 @@ describe("simulateViaRpc — provider failover on 429 / 5xx", () => {
     const tx = createSampleTx();
     const result = await simulateViaRpc(tx, "testnet");
     expect(result).toEqual(fakeResponse);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Adaptive Request Hedging (#hedging)
+// ---------------------------------------------------------------------------
+
+jest.mock("../../middleware/metrics", () => ({
+  __esModule: true,
+  default: {
+    recordHedgedRequest: jest.fn(),
+    // include stubs for all other metrics methods so other tests keep working
+    recordCacheHit: jest.fn(),
+    recordCacheMiss: jest.fn(),
+    recordL1Hit: jest.fn(),
+    recordL1Miss: jest.fn(),
+    recordL2Hit: jest.fn(),
+    recordL2Miss: jest.fn(),
+    recordSingleflightCoalesced: jest.fn(),
+    recordSingleflightPending: jest.fn(),
+    recordCacheLatency: jest.fn(),
+    recordCacheOperation: jest.fn(),
+    recordMemoryCacheKeys: jest.fn(),
+    recordMemoryCacheBytes: jest.fn(),
+    recordCacheEviction: jest.fn(),
+    recordEmergencyTrim: jest.fn(),
+    recordSimulation: jest.fn(),
+    recordSimulationDuration: jest.fn(),
+    recordRpcError: jest.fn(),
+    incrementActiveSimulations: jest.fn(),
+    decrementActiveSimulations: jest.fn(),
+    recordXdrBytes: jest.fn(),
+    recordFootprintEntries: jest.fn(),
+    getMetrics: jest.fn().mockResolvedValue(""),
+    getRegister: jest.fn(),
+  },
+}));
+
+describe("hedgedSimulate — adaptive request hedging", () => {
+  /** Shorthand helper: a promise that resolves after `ms` milliseconds. */
+  function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  const fakeResponsePrimary = {
+    id: "primary",
+    latestLedger: 100,
+    results: [],
+  } as unknown as StellarSdk.rpc.Api.SimulateTransactionResponse;
+
+  const fakeResponseSecondary = {
+    id: "secondary",
+    latestLedger: 101,
+    results: [],
+  } as unknown as StellarSdk.rpc.Api.SimulateTransactionResponse;
+
+  let mockSimulate: jest.Mock;
+  let recordHedgedRequestMock: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetRpcPool();
+
+    mockSimulate = jest.fn();
+    (stellarConfig.getRpcServer as jest.Mock).mockReturnValue({
+      simulateTransaction: mockSimulate,
+      getLedgerEntries: jest.fn(),
+    } as unknown as StellarSdk.rpc.Server);
+
+    recordHedgedRequestMock = metrics.recordHedgedRequest as jest.Mock;
+
+    // Use fake timers so we can control setTimeout without real waiting
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    resetRpcPool();
+    delete process.env.TESTNET_RPC_URL;
+    delete process.env.HEDGE_DELAY_MS;
+  });
+
+  it("returns primary response when primary replies before hedge threshold", async () => {
+    // Primary resolves immediately (synchronously on next microtask)
+    mockSimulate.mockResolvedValue(fakeResponsePrimary);
+
+    const tx = createSampleTx();
+    const resultPromise = hedgedSimulate(tx, "testnet");
+
+    // Flush all pending microtasks — primary resolves before timer fires
+    await jest.runAllTimersAsync();
+
+    const result = await resultPromise;
+    expect(result).toEqual(fakeResponsePrimary);
+    // Hedge was never dispatched since primary was fast
+    expect(recordHedgedRequestMock).not.toHaveBeenCalledWith("dispatched");
+  });
+
+  it("dispatches hedged request and returns secondary when primary is slow", async () => {
+    // Primary never resolves within the test; secondary resolves immediately after hedge fires
+    mockSimulate
+      .mockImplementationOnce(
+        () => new Promise<never>(() => {}), // primary hangs
+      )
+      .mockResolvedValueOnce(fakeResponseSecondary); // secondary is fast
+
+    const tx = createSampleTx();
+    const resultPromise = hedgedSimulate(tx, "testnet");
+
+    // Advance clock past hedge delay to trigger the backup request
+    await jest.advanceTimersByTimeAsync(HEDGE_DELAY_MS + 10);
+
+    const result = await resultPromise;
+    expect(result).toEqual(fakeResponseSecondary);
+    expect(recordHedgedRequestMock).toHaveBeenCalledWith("dispatched");
+    expect(recordHedgedRequestMock).toHaveBeenCalledWith("won");
+  });
+
+  it("increments rpc_hedged_requests_total{result=dispatched} when hedge is fired", async () => {
+    mockSimulate
+      .mockImplementationOnce(() => new Promise<never>(() => {})) // primary hangs
+      .mockResolvedValueOnce(fakeResponseSecondary);
+
+    const tx = createSampleTx();
+    const resultPromise = hedgedSimulate(tx, "testnet");
+
+    await jest.advanceTimersByTimeAsync(HEDGE_DELAY_MS + 10);
+    await resultPromise;
+
+    expect(recordHedgedRequestMock).toHaveBeenCalledWith("dispatched");
+  });
+
+  it("does not leak unhandled rejections when slower request is aborted", async () => {
+    // Primary is fast; secondary (hedge) would start but should be cancelled
+    mockSimulate.mockResolvedValue(fakeResponsePrimary);
+
+    const tx = createSampleTx();
+    const resultPromise = hedgedSimulate(tx, "testnet");
+
+    await jest.runAllTimersAsync();
+
+    // Should resolve cleanly with no unhandled rejection warnings
+    await expect(resultPromise).resolves.toEqual(fakeResponsePrimary);
+    // The hedge timer should have been cleared — no "dispatched" event
+    expect(recordHedgedRequestMock).not.toHaveBeenCalledWith("dispatched");
+  });
+
+  it("resolves with primary when both complete but primary is first", async () => {
+    // Both reply, but primary slightly faster
+    mockSimulate
+      .mockResolvedValueOnce(fakeResponsePrimary) // primary
+      .mockResolvedValueOnce(fakeResponseSecondary); // secondary (hedge)
+
+    const tx = createSampleTx();
+    const resultPromise = hedgedSimulate(tx, "testnet");
+
+    await jest.runAllTimersAsync();
+
+    const result = await resultPromise;
+    expect(result).toEqual(fakeResponsePrimary);
   });
 });
