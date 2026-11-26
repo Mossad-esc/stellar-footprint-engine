@@ -31,15 +31,7 @@ Thumbs.db
 
 # Test artifacts
 apps/contracts/*/test_snapshots/
-**/__snapshots__/
-*.snap
 proptest-regressions/
-**/__snapshots__/
-*.snap
-
-# Jest snapshots
-__snapshots__/
-*.snap
 
 # JS / Node
 node_modules/
@@ -50,10 +42,6 @@ build/
 .next/
 .cache/
 *.tsbuildinfo
-
-# Test snapshots
-src/**/*.snap
-**/*.snap
 
 package-lock.json
 
@@ -80,8 +68,6 @@ nginx/certs/*.pem
 nginx/certs/*.crt
 nginx/certs/*.key
 
-**/__snapshots__/
-**/*.snap
 # Misc PR/planning docs at root (don't track these)
 PR_DESCRIPTION.md
 PR_MESSAGES.md
@@ -89,7 +75,3 @@ PR_SUMMARY.md
 PLAN.md
 GRAFANA_DASHBOARD_COMPLETE.md
 IMPLEMENTATION_INDEX.md
-
-# test snapshots
-**/__snapshots__/
-**/*.snap

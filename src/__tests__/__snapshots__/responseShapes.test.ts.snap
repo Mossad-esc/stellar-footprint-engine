@@ -1,0 +1,2788 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`endpoint response shape snapshots matches parsed openapi.yaml schema snapshot 1`] = `
+{
+  "components": {
+    "responses": {
+      "BadRequest": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": "Missing required field: xdr",
+              "success": false,
+            },
+            "schema": {
+              "$ref": "#/components/schemas/EnvelopeErrorResponse",
+            },
+          },
+        },
+        "description": "Missing or invalid request parameters",
+      },
+      "InternalServerError": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": "Unexpected error",
+              "success": false,
+            },
+            "schema": {
+              "$ref": "#/components/schemas/EnvelopeErrorResponse",
+            },
+          },
+        },
+        "description": "Unexpected server error",
+      },
+      "ServiceUnavailable": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": "RPC circuit breaker is open. Try again later.",
+              "success": false,
+            },
+            "schema": {
+              "$ref": "#/components/schemas/EnvelopeErrorResponse",
+            },
+          },
+        },
+        "description": "RPC circuit breaker is open; service temporarily unavailable",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds until the circuit breaker attempts recovery",
+            "example": 28,
+            "schema": {
+              "type": "integer",
+            },
+          },
+        },
+      },
+      "TooManyRequests": {
+        "content": {
+          "application/json": {
+            "example": {
+              "error": "Too Many Requests",
+              "message": "Rate limit exceeded. Try again in 60 seconds.",
+              "retryAfter": 60,
+            },
+            "schema": {
+              "$ref": "#/components/schemas/RateLimitErrorResponse",
+            },
+          },
+        },
+        "description": "Rate limit exceeded",
+        "headers": {
+          "RateLimit-Limit": {
+            "description": "Maximum requests allowed in the window",
+            "example": 60,
+            "schema": {
+              "type": "integer",
+            },
+          },
+          "RateLimit-Remaining": {
+            "description": "Requests remaining in the current window",
+            "example": 0,
+            "schema": {
+              "type": "integer",
+            },
+          },
+          "RateLimit-Reset": {
+            "description": "Unix timestamp (seconds) when the window resets",
+            "example": 1700000060,
+            "schema": {
+              "type": "integer",
+            },
+          },
+          "Retry-After": {
+            "description": "Seconds to wait before retrying",
+            "example": 60,
+            "schema": {
+              "type": "integer",
+            },
+          },
+          "X-RateLimit-Limit": {
+            "description": "Legacy alias for RateLimit-Limit",
+            "schema": {
+              "type": "integer",
+            },
+          },
+          "X-RateLimit-Remaining": {
+            "description": "Legacy alias for RateLimit-Remaining",
+            "schema": {
+              "type": "integer",
+            },
+          },
+          "X-RateLimit-Reset": {
+            "description": "Legacy alias for RateLimit-Reset",
+            "schema": {
+              "type": "integer",
+            },
+          },
+        },
+      },
+    },
+    "schemas": {
+      "AssetInfo": {
+        "properties": {
+          "code": {
+            "description": "XLM for native balances, or the issued asset code",
+            "type": "string",
+          },
+          "issuer": {
+            "description": "Stellar account address; omitted for native XLM",
+            "type": "string",
+          },
+        },
+        "required": [
+          "code",
+        ],
+        "type": "object",
+      },
+      "AuthEntry": {
+        "properties": {
+          "authorizer": {
+            "type": "string",
+          },
+          "contractId": {
+            "type": "string",
+          },
+          "credentialsType": {
+            "type": "string",
+          },
+          "functionName": {
+            "type": "string",
+          },
+          "invocationTree": {
+            "$ref": "#/components/schemas/AuthorizationInvocation",
+          },
+          "xdr": {
+            "type": "string",
+          },
+        },
+        "type": "object",
+      },
+      "AuthorizationInvocation": {
+        "properties": {
+          "authorizationLevel": {
+            "enum": [
+              "payment",
+              "admin",
+            ],
+            "type": "string",
+          },
+          "invocation": {
+            "$ref": "#/components/schemas/ContractInvocation",
+          },
+          "subInvocations": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationInvocation",
+            },
+            "type": "array",
+          },
+          "type": {
+            "type": "string",
+          },
+        },
+        "type": "object",
+      },
+      "CacheInvalidateResponse": {
+        "properties": {
+          "backend": {
+            "description": "Cache backend that was flushed",
+            "enum": [
+              "redis",
+              "memory",
+            ],
+            "type": "string",
+          },
+          "message": {
+            "example": "Cache invalidated",
+            "type": "string",
+          },
+        },
+        "required": [
+          "message",
+          "backend",
+        ],
+        "type": "object",
+      },
+      "ContractInvocation": {
+        "properties": {
+          "argTypes": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "args": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "contractId": {
+            "type": "string",
+          },
+          "functionName": {
+            "type": "string",
+          },
+          "interfaceEstimation": {
+            "properties": {
+              "basis": {
+                "type": "string",
+              },
+              "name": {
+                "enum": [
+                  "SEP-41",
+                  "SEP-40",
+                  "DAO governance",
+                  "unknown",
+                ],
+                "type": "string",
+              },
+            },
+            "type": "object",
+          },
+        },
+        "required": [
+          "contractId",
+          "functionName",
+          "args",
+        ],
+        "type": "object",
+      },
+      "ContractTtlResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "contractId": {
+                "type": "string",
+              },
+              "currentLedger": {
+                "type": "integer",
+              },
+              "estimatedExpirationDate": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string",
+              },
+              "liveUntilLedger": {
+                "type": "integer",
+              },
+              "network": {
+                "enum": [
+                  "testnet",
+                  "mainnet",
+                  "futurenet",
+                ],
+                "type": "string",
+              },
+              "remainingLedgers": {
+                "type": "integer",
+              },
+            },
+            "required": [
+              "contractId",
+              "liveUntilLedger",
+              "remainingLedgers",
+              "estimatedExpirationDate",
+              "currentLedger",
+              "network",
+            ],
+            "type": "object",
+          },
+          "success": {
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "data",
+        ],
+        "type": "object",
+      },
+      "CostBreakdownResponse": {
+        "description": "Detailed breakdown of Soroban resource fees",
+        "type": "object",
+      },
+      "DecodeBatchRequest": {
+        "properties": {
+          "items": {
+            "description": "Array of XDR items to decode",
+            "items": {
+              "properties": {
+                "id": {
+                  "description": "Optional identifier for the item",
+                  "type": "string",
+                },
+                "type": {
+                  "default": "transaction",
+                  "enum": [
+                    "transaction",
+                    "operation",
+                    "ledger_key",
+                    "auth_entry",
+                  ],
+                  "type": "string",
+                },
+                "xdr": {
+                  "description": "Base64-encoded XDR string to decode",
+                  "type": "string",
+                },
+              },
+              "required": [
+                "xdr",
+              ],
+              "type": "object",
+            },
+            "maxItems": 25,
+            "minItems": 1,
+            "type": "array",
+          },
+        },
+        "required": [
+          "items",
+        ],
+        "type": "object",
+      },
+      "DecodeBatchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "properties": {
+                "decoded": {
+                  "additionalProperties": true,
+                  "type": "object",
+                },
+                "error": {
+                  "type": "string",
+                },
+                "id": {
+                  "type": "string",
+                },
+                "success": {
+                  "type": "boolean",
+                },
+              },
+              "type": "object",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "results",
+        ],
+        "type": "object",
+      },
+      "DecodeResponse": {
+        "properties": {
+          "decoded": {
+            "additionalProperties": true,
+            "description": "Human-readable JSON representation of the XDR",
+            "type": "object",
+          },
+          "success": {
+            "type": "boolean",
+          },
+          "type": {
+            "description": "XDR type used for decoding",
+            "enum": [
+              "transaction",
+              "operation",
+              "ledger_key",
+              "auth_entry",
+            ],
+            "type": "string",
+          },
+        },
+        "required": [
+          "success",
+          "type",
+          "decoded",
+        ],
+        "type": "object",
+      },
+      "DryRunResponse": {
+        "properties": {
+          "dryRun": {
+            "enum": [
+              true,
+            ],
+            "type": "boolean",
+          },
+          "network": {
+            "$ref": "#/components/schemas/Network",
+          },
+          "operationCount": {
+            "type": "integer",
+          },
+          "operations": {
+            "items": {
+              "properties": {
+                "authEntries": {
+                  "items": {
+                    "$ref": "#/components/schemas/AuthEntry",
+                  },
+                  "type": "array",
+                },
+                "invocation": {
+                  "$ref": "#/components/schemas/ContractInvocation",
+                },
+                "requiredSigners": {
+                  "items": {
+                    "type": "string",
+                  },
+                  "type": "array",
+                },
+                "source": {
+                  "nullable": true,
+                  "type": "string",
+                },
+                "type": {
+                  "type": "string",
+                },
+              },
+              "required": [
+                "type",
+                "source",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "sequence": {
+            "type": "string",
+          },
+          "sourceAccount": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "dryRun",
+          "network",
+          "sourceAccount",
+          "sequence",
+          "operationCount",
+          "operations",
+        ],
+        "type": "object",
+      },
+      "EnvelopeErrorResponse": {
+        "properties": {
+          "error": {
+            "description": "Human-readable error message",
+            "type": "string",
+          },
+          "success": {
+            "enum": [
+              false,
+            ],
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "error",
+        ],
+        "type": "object",
+      },
+      "EnvelopeResponse": {
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "description": "Response payload (shape varies by endpoint)",
+          },
+          "success": {
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+        ],
+        "type": "object",
+      },
+      "ErrorResponse": {
+        "properties": {
+          "code": {
+            "description": "Machine-readable error code (optional)",
+            "type": "string",
+          },
+          "error": {
+            "description": "Human-readable error message",
+            "type": "string",
+          },
+          "requestId": {
+            "description": "Request correlation ID from X-Request-ID header",
+            "type": "string",
+          },
+          "success": {
+            "enum": [
+              false,
+            ],
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "error",
+          "code",
+        ],
+        "type": "object",
+      },
+      "EstimateFeeRequest": {
+        "description": "Invocation requires cpuInsns and memBytes. Restoration and extension require xdr or footprint.",
+        "properties": {
+          "cpuInsns": {
+            "description": "CPU instructions (non-negative integer string)",
+            "example": "1234567",
+            "type": "string",
+          },
+          "extendTo": {
+            "description": "TTL extension in ledgers, required when building an extension from a footprint",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer",
+          },
+          "footprint": {
+            "description": "Base64 LedgerKey XDR arrays. Restore uses readWrite only; extend uses readOnly only.",
+            "properties": {
+              "readOnly": {
+                "items": {
+                  "type": "string",
+                },
+                "type": "array",
+              },
+              "readWrite": {
+                "items": {
+                  "type": "string",
+                },
+                "type": "array",
+              },
+            },
+            "required": [
+              "readOnly",
+              "readWrite",
+            ],
+            "type": "object",
+          },
+          "memBytes": {
+            "description": "Memory bytes (non-negative integer string)",
+            "example": "8192",
+            "type": "string",
+          },
+          "network": {
+            "$ref": "#/components/schemas/Network",
+          },
+          "operationType": {
+            "default": "invoke",
+            "enum": [
+              "invoke",
+              "restore",
+              "extend",
+            ],
+            "type": "string",
+          },
+          "xdr": {
+            "description": "Transaction envelope containing the selected restoration or extension operation",
+            "type": "string",
+          },
+        },
+        "type": "object",
+      },
+      "EstimateFeeResponse": {
+        "properties": {
+          "baseFee": {
+            "description": "Recommended inclusion fee in stroops",
+            "type": "string",
+          },
+          "breakdown": {
+            "description": "Maintenance fee components using current rates and Core's default RPC envelope size adjustment",
+            "properties": {
+              "baseFee": {
+                "type": "string",
+              },
+              "otherResourceFee": {
+                "description": "Instruction, disk read, history and bandwidth charges",
+                "type": "string",
+              },
+              "refundableFee": {
+                "description": "RPC rent budget including refundable TTL writes",
+                "type": "string",
+              },
+              "writeFee": {
+                "description": "Entry and byte write charges excluding refundable TTL writes",
+                "type": "string",
+              },
+            },
+            "type": "object",
+          },
+          "feeInXLM": {
+            "description": "Total fee in XLM with seven decimal places",
+            "type": "string",
+          },
+          "operationType": {
+            "enum": [
+              "restore",
+              "extend",
+            ],
+            "type": "string",
+          },
+          "resourceFee": {
+            "description": "Soroban resource fee in stroops",
+            "type": "string",
+          },
+          "totalFee": {
+            "description": "Total recommended fee in stroops",
+            "type": "string",
+          },
+        },
+        "type": "object",
+      },
+      "Footprint": {
+        "properties": {
+          "readOnly": {
+            "description": "Base64-encoded read-only ledger keys",
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "readWrite": {
+            "description": "Base64-encoded read-write ledger keys",
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "readOnly",
+          "readWrite",
+        ],
+        "type": "object",
+      },
+      "FootprintBreakdown": {
+        "properties": {
+          "contractCode": {
+            "$ref": "#/components/schemas/StorageStats",
+          },
+          "contractInstance": {
+            "$ref": "#/components/schemas/StorageStats",
+          },
+          "persistentData": {
+            "$ref": "#/components/schemas/StorageStats",
+          },
+          "temporaryData": {
+            "$ref": "#/components/schemas/StorageStats",
+          },
+        },
+        "required": [
+          "contractCode",
+          "contractInstance",
+          "persistentData",
+          "temporaryData",
+        ],
+        "type": "object",
+      },
+      "FootprintDiffRequest": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/Footprint",
+          },
+          "before": {
+            "$ref": "#/components/schemas/Footprint",
+          },
+        },
+        "required": [
+          "before",
+          "after",
+        ],
+        "type": "object",
+      },
+      "FootprintDiffResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "added": {
+                "$ref": "#/components/schemas/Footprint",
+              },
+              "removed": {
+                "$ref": "#/components/schemas/Footprint",
+              },
+              "unchanged": {
+                "$ref": "#/components/schemas/Footprint",
+              },
+            },
+            "required": [
+              "added",
+              "removed",
+              "unchanged",
+            ],
+            "type": "object",
+          },
+          "success": {
+            "enum": [
+              true,
+            ],
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "data",
+        ],
+        "type": "object",
+      },
+      "FootprintEntry": {
+        "properties": {
+          "accountId": {
+            "type": "string",
+          },
+          "assetInfo": {
+            "$ref": "#/components/schemas/AssetInfo",
+          },
+          "contractId": {
+            "description": "Contract address bytes or code hash in hexadecimal",
+            "type": "string",
+          },
+          "isSAC": {
+            "type": "boolean",
+          },
+          "storageType": {
+            "enum": [
+              "contractCode",
+              "contractInstance",
+              "persistentData",
+              "temporaryData",
+            ],
+            "type": "string",
+          },
+          "ttlInfo": {
+            "$ref": "#/components/schemas/TtlInfo",
+          },
+          "type": {
+            "enum": [
+              "ContractData",
+              "ContractCode",
+              "Account",
+              "TrustLine",
+              "Offer",
+              "Data",
+              "ClaimableBalance",
+              "LiquidityPool",
+              "ConfigSetting",
+              "Ttl",
+              "Unknown",
+            ],
+            "type": "string",
+          },
+          "xdr": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "xdr",
+          "type",
+        ],
+        "type": "object",
+      },
+      "FootprintStats": {
+        "properties": {
+          "assetInfo": {
+            "$ref": "#/components/schemas/AssetInfo",
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/FootprintBreakdown",
+          },
+          "estimatedSizeBytes": {
+            "type": "integer",
+          },
+          "isSAC": {
+            "type": "boolean",
+          },
+          "readOnlyCount": {
+            "type": "integer",
+          },
+          "readWriteCount": {
+            "type": "integer",
+          },
+          "totalEntries": {
+            "type": "integer",
+          },
+        },
+        "type": "object",
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "enum": [
+              "ok",
+            ],
+            "type": "string",
+          },
+          "timestamp": {
+            "format": "date-time",
+            "type": "string",
+          },
+          "uptime": {
+            "description": "Process uptime in seconds",
+            "type": "number",
+          },
+          "version": {
+            "description": "Service version from package.json",
+            "type": "string",
+          },
+        },
+        "required": [
+          "status",
+          "uptime",
+          "timestamp",
+        ],
+        "type": "object",
+      },
+      "Network": {
+        "default": "testnet",
+        "description": "Stellar network to use",
+        "enum": [
+          "testnet",
+          "mainnet",
+          "futurenet",
+        ],
+        "type": "string",
+      },
+      "NetworkStatusResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "latestLedger": {
+                "description": "Latest closed ledger sequence",
+                "type": "integer",
+              },
+              "passphrase": {
+                "description": "Network passphrase",
+                "type": "string",
+              },
+            },
+            "type": "object",
+          },
+          "success": {
+            "enum": [
+              true,
+            ],
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "data",
+        ],
+        "type": "object",
+      },
+      "ParsedFootprint": {
+        "properties": {
+          "breakdown": {
+            "$ref": "#/components/schemas/FootprintBreakdown",
+          },
+          "readOnly": {
+            "items": {
+              "$ref": "#/components/schemas/FootprintEntry",
+            },
+            "type": "array",
+          },
+          "readWrite": {
+            "items": {
+              "$ref": "#/components/schemas/FootprintEntry",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "readOnly",
+          "readWrite",
+          "breakdown",
+        ],
+        "type": "object",
+      },
+      "RateLimitErrorResponse": {
+        "properties": {
+          "error": {
+            "example": "Too Many Requests",
+            "type": "string",
+          },
+          "message": {
+            "description": "Extended message with retry guidance",
+            "example": "Rate limit exceeded. Try again in 60 seconds.",
+            "type": "string",
+          },
+          "retryAfter": {
+            "description": "Seconds to wait before retrying",
+            "example": 60,
+            "type": "integer",
+          },
+        },
+        "required": [
+          "error",
+        ],
+        "type": "object",
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "checks": {
+            "properties": {
+              "cache": {
+                "properties": {
+                  "details": {
+                    "additionalProperties": true,
+                    "type": "object",
+                  },
+                  "status": {
+                    "enum": [
+                      "healthy",
+                      "unhealthy",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "type": "object",
+              },
+              "rpcCircuitBreaker": {
+                "properties": {
+                  "details": {
+                    "additionalProperties": true,
+                    "type": "object",
+                  },
+                  "status": {
+                    "enum": [
+                      "healthy",
+                      "unhealthy",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "type": "object",
+              },
+            },
+            "type": "object",
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "not ready",
+            ],
+            "type": "string",
+          },
+          "timestamp": {
+            "format": "date-time",
+            "type": "string",
+          },
+        },
+        "required": [
+          "status",
+          "checks",
+          "timestamp",
+        ],
+        "type": "object",
+      },
+      "ResourceCost": {
+        "properties": {
+          "cpuInsns": {
+            "description": "CPU instructions consumed (string to avoid precision loss)",
+            "example": "1234567",
+            "type": "string",
+          },
+          "memBytes": {
+            "description": "Memory bytes consumed (string to avoid precision loss)",
+            "example": "8192",
+            "type": "string",
+          },
+          "ttlExtension": {
+            "$ref": "#/components/schemas/TtlExtensionRecommendation",
+          },
+        },
+        "required": [
+          "cpuInsns",
+          "memBytes",
+        ],
+        "type": "object",
+      },
+      "RestoreRequest": {
+        "properties": {
+          "network": {
+            "$ref": "#/components/schemas/Network",
+          },
+          "xdr": {
+            "description": "Base64-encoded Soroban transaction XDR that requires restoration",
+            "example": "AAAAAgAAAAC...",
+            "type": "string",
+          },
+        },
+        "required": [
+          "xdr",
+        ],
+        "type": "object",
+      },
+      "SignerThresholdReport": {
+        "description": "Per authorization tree weight comparison; method names estimate medium/payment or high/admin requirements, without verifying address credential signatures",
+        "properties": {
+          "accountId": {
+            "type": "string",
+          },
+          "authorizationLevel": {
+            "enum": [
+              "payment",
+              "admin",
+            ],
+            "type": "string",
+          },
+          "invocationXdr": {
+            "type": "string",
+          },
+          "isSufficient": {
+            "nullable": true,
+            "type": "boolean",
+          },
+          "signers": {
+            "items": {
+              "properties": {
+                "publicKey": {
+                  "type": "string",
+                },
+                "weight": {
+                  "nullable": true,
+                  "type": "integer",
+                },
+              },
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "thresholdRequired": {
+            "nullable": true,
+            "type": "integer",
+          },
+          "totalWeight": {
+            "nullable": true,
+            "type": "integer",
+          },
+        },
+        "type": "object",
+      },
+      "SimulateBatchRequest": {
+        "properties": {
+          "network": {
+            "$ref": "#/components/schemas/Network",
+          },
+          "transactions": {
+            "description": "Array of transactions to simulate (maximum 10)",
+            "items": {
+              "properties": {
+                "xdr": {
+                  "description": "Base64-encoded Soroban transaction XDR",
+                  "type": "string",
+                },
+              },
+              "required": [
+                "xdr",
+              ],
+              "type": "object",
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "type": "array",
+          },
+        },
+        "required": [
+          "transactions",
+        ],
+        "type": "object",
+      },
+      "SimulateBatchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "oneOf": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SimulateSuccessResponse",
+                    },
+                    {
+                      "properties": {
+                        "index": {
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "index",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SimulateFailureResponse",
+                    },
+                    {
+                      "properties": {
+                        "index": {
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "index",
+                      ],
+                      "type": "object",
+                    },
+                  ],
+                },
+              ],
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "results",
+        ],
+        "type": "object",
+      },
+      "SimulateFailureResponse": {
+        "properties": {
+          "code": {
+            "description": "Machine-readable error code",
+            "type": "string",
+          },
+          "error": {
+            "description": "Human-readable error message from the simulation",
+            "type": "string",
+          },
+          "success": {
+            "enum": [
+              false,
+            ],
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "error",
+          "code",
+        ],
+        "type": "object",
+      },
+      "SimulateHistoryResponse": {
+        "properties": {
+          "ip": {
+            "type": "string",
+          },
+          "limit": {
+            "type": "integer",
+          },
+          "results": {
+            "items": {
+              "properties": {
+                "network": {
+                  "type": "string",
+                },
+                "readOnlyCount": {
+                  "type": "integer",
+                },
+                "readWriteCount": {
+                  "type": "integer",
+                },
+                "success": {
+                  "type": "boolean",
+                },
+                "timestamp": {
+                  "format": "date-time",
+                  "type": "string",
+                },
+              },
+              "required": [
+                "timestamp",
+                "network",
+                "success",
+                "readOnlyCount",
+                "readWriteCount",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "total": {
+            "type": "integer",
+          },
+        },
+        "required": [
+          "ip",
+          "total",
+          "limit",
+          "results",
+        ],
+        "type": "object",
+      },
+      "SimulateRequest": {
+        "properties": {
+          "dryRun": {
+            "default": false,
+            "description": "If true, performs a dry-run simulation locally without calling RPC. Can also be passed as query parameter ?dryRun=true",
+            "example": false,
+            "type": "boolean",
+          },
+          "ledgerSequence": {
+            "description": "Optional ledger sequence to simulate against (for reproducibility)",
+            "example": 12345678,
+            "minimum": 1,
+            "type": "integer",
+          },
+          "network": {
+            "$ref": "#/components/schemas/Network",
+          },
+          "webhookUrl": {
+            "description": "Optional HTTPS callback URL for asynchronous simulation delivery",
+            "example": "https://hooks.example.com/stellar/simulate",
+            "format": "uri",
+            "type": "string",
+          },
+          "xdr": {
+            "description": "Base64-encoded Soroban transaction XDR",
+            "example": "AAAAAgAAAAC...",
+            "type": "string",
+          },
+        },
+        "required": [
+          "xdr",
+        ],
+        "type": "object",
+      },
+      "SimulateSuccessResponse": {
+        "properties": {
+          "authEntries": {
+            "items": {
+              "$ref": "#/components/schemas/AuthEntry",
+            },
+            "type": "array",
+          },
+          "cacheHit": {
+            "description": "Whether the result was served from cache",
+            "type": "boolean",
+          },
+          "cost": {
+            "$ref": "#/components/schemas/ResourceCost",
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/ParsedFootprint",
+          },
+          "invocation": {
+            "$ref": "#/components/schemas/ContractInvocation",
+          },
+          "requiredSigners": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "signerThresholdReports": {
+            "items": {
+              "$ref": "#/components/schemas/SignerThresholdReport",
+            },
+            "type": "array",
+          },
+          "success": {
+            "enum": [
+              true,
+            ],
+            "type": "boolean",
+          },
+          "ttl": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TtlInfo",
+            },
+            "type": "object",
+          },
+          "ttlWarnings": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "success",
+          "footprint",
+          "cost",
+        ],
+        "type": "object",
+      },
+      "StorageStats": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Footprint",
+          },
+          {
+            "properties": {
+              "count": {
+                "type": "integer",
+              },
+              "estimatedSizeBytes": {
+                "description": "Serialized XDR ledger key bytes, excluding stored values",
+                "type": "integer",
+              },
+            },
+            "required": [
+              "count",
+              "estimatedSizeBytes",
+            ],
+            "type": "object",
+          },
+        ],
+      },
+      "SupportedNetworksResponse": {
+        "properties": {
+          "networks": {
+            "items": {
+              "$ref": "#/components/schemas/Network",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "networks",
+        ],
+        "type": "object",
+      },
+      "TtlExtensionRecommendation": {
+        "properties": {
+          "entries": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "extendTo": {
+            "description": "Relative ledger count for ExtendFootprintTTLOp",
+            "type": "integer",
+          },
+          "restoreFirst": {
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "extendTo",
+          "entries",
+          "restoreFirst",
+        ],
+        "type": "object",
+      },
+      "TtlInfo": {
+        "properties": {
+          "expiresInLedgers": {
+            "description": "TTL ledger minus simulation latestLedger; negative values indicate archival",
+            "nullable": true,
+            "type": "integer",
+          },
+          "liveUntilLedger": {
+            "nullable": true,
+            "type": "integer",
+          },
+          "requiresExtension": {
+            "type": "boolean",
+          },
+          "requiresRestore": {
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "liveUntilLedger",
+          "expiresInLedgers",
+        ],
+        "type": "object",
+      },
+      "ValidateRequest": {
+        "properties": {
+          "network": {
+            "$ref": "#/components/schemas/Network",
+          },
+          "xdr": {
+            "description": "Base64-encoded Stellar/Soroban transaction XDR",
+            "example": "AAAAAgAAAAC...",
+            "type": "string",
+          },
+        },
+        "required": [
+          "xdr",
+        ],
+        "type": "object",
+      },
+      "ValidateResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "errors": {
+                "items": {
+                  "type": "string",
+                },
+                "type": "array",
+              },
+              "network": {
+                "$ref": "#/components/schemas/Network",
+              },
+              "valid": {
+                "type": "boolean",
+              },
+              "warnings": {
+                "items": {
+                  "type": "string",
+                },
+                "type": "array",
+              },
+            },
+            "required": [
+              "valid",
+              "errors",
+              "warnings",
+              "network",
+            ],
+            "type": "object",
+          },
+          "success": {
+            "enum": [
+              true,
+            ],
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "data",
+        ],
+        "type": "object",
+      },
+      "WebhookAcceptedResponse": {
+        "properties": {
+          "accepted": {
+            "enum": [
+              true,
+            ],
+            "type": "boolean",
+          },
+          "jobId": {
+            "type": "string",
+          },
+          "status": {
+            "enum": [
+              "pending",
+            ],
+            "type": "string",
+          },
+        },
+        "required": [
+          "accepted",
+          "jobId",
+          "status",
+        ],
+        "type": "object",
+      },
+      "WebhookJobResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "attempts": {
+                "type": "integer",
+              },
+              "completedAt": {
+                "format": "date-time",
+                "type": "string",
+              },
+              "createdAt": {
+                "format": "date-time",
+                "type": "string",
+              },
+              "jobId": {
+                "type": "string",
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "delivered",
+                  "failed",
+                ],
+                "type": "string",
+              },
+              "webhookUrl": {
+                "format": "uri",
+                "type": "string",
+              },
+            },
+            "required": [
+              "jobId",
+              "webhookUrl",
+              "status",
+              "createdAt",
+              "attempts",
+            ],
+            "type": "object",
+          },
+          "success": {
+            "enum": [
+              true,
+            ],
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "success",
+          "data",
+        ],
+        "type": "object",
+      },
+    },
+    "securitySchemes": {
+      "ApiKeyHeader": {
+        "description": "Optional \`X-API-Key\` header alternative when \`API_KEYS\` is configured",
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey",
+      },
+      "BearerAuth": {
+        "description": "Optional API key authentication when \`API_KEYS\` is configured",
+        "scheme": "bearer",
+        "type": "http",
+      },
+    },
+  },
+  "info": {
+    "description": "Pre-flight simulation and footprint extraction for Soroban smart contract transactions.
+
+This service automates the complex footprint extraction process — a required step before
+submitting any Soroban transaction to the Stellar network.
+",
+    "license": {
+      "name": "MIT",
+    },
+    "title": "Stellar Footprint Service API",
+    "version": "1.0.0",
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/cache": {
+      "delete": {
+        "description": "Flushes all cached simulation entries from the active cache backend
+(\`redis\` or \`memory\`).
+",
+        "operationId": "invalidateCache",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "backend": "memory",
+                  "message": "Cache invalidated",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/CacheInvalidateResponse",
+                },
+              },
+            },
+            "description": "Cache invalidated successfully",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Flush simulation cache",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+    "/contract/{contractId}/ttl": {
+      "get": {
+        "description": "Returns the current TTL (time-to-live) and expiration ledger information
+for a specific contract address. Queries the Stellar RPC for the contract
+instance ledger entry and calculates remaining ledgers and estimated
+wall-clock time until expiration (assuming 5-second ledger close time).
+",
+        "operationId": "getContractTtl",
+        "parameters": [
+          {
+            "description": "Stellar contract address (StrKey format starting with 'C')",
+            "in": "path",
+            "name": "contractId",
+            "required": true,
+            "schema": {
+              "example": "CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "type": "string",
+            },
+          },
+          {
+            "description": "Stellar network to query",
+            "in": "query",
+            "name": "network",
+            "required": false,
+            "schema": {
+              "default": "testnet",
+              "enum": [
+                "testnet",
+                "mainnet",
+                "futurenet",
+              ],
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": {
+                    "contractId": "CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE",
+                    "currentLedger": 12295678,
+                    "estimatedExpirationDate": "2024-06-15T10:30:00.000Z",
+                    "liveUntilLedger": 12345678,
+                    "network": "testnet",
+                    "remainingLedgers": 50000,
+                  },
+                  "success": true,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ContractTtlResponse",
+                },
+              },
+            },
+            "description": "Contract TTL information retrieved",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "JOB_NOT_FOUND",
+                  "error": "Contract not found on the specified network",
+                  "success": false,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse",
+                },
+              },
+            },
+            "description": "Contract not found on the specified network",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Get contract TTL and expiration information",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/decode": {
+      "get": {
+        "description": "Decodes a base64-encoded XDR string into a human-readable JSON representation.
+Useful for debugging transaction structures and ledger entries.
+
+Supported \`type\` values: \`transaction\`, \`operation\`, \`ledger_key\`, \`auth_entry\`.
+",
+        "operationId": "decodeXdr",
+        "parameters": [
+          {
+            "description": "Base64-encoded XDR string to decode",
+            "in": "query",
+            "name": "xdr",
+            "required": true,
+            "schema": {
+              "example": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+              "type": "string",
+            },
+          },
+          {
+            "description": "XDR type for decoding. Defaults to \`transaction\`.
+Supported values: \`transaction\`, \`operation\`, \`ledger_key\`, \`auth_entry\`.
+",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "default": "transaction",
+              "enum": [
+                "transaction",
+                "operation",
+                "ledger_key",
+                "auth_entry",
+              ],
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "decoded": {
+                    "fee": 100,
+                    "operations": [],
+                  },
+                  "success": true,
+                  "type": "transaction",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/DecodeResponse",
+                },
+              },
+            },
+            "description": "XDR decoded successfully",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Decode XDR to human-readable JSON",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+    "/decode/batch": {
+      "post": {
+        "description": "Decodes multiple base64-encoded XDR strings in a single request.
+Accepts up to 25 items per batch. Each item is decoded independently,
+so invalid XDRs in one item do not affect other items in the batch.
+",
+        "operationId": "decodeBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "items": [
+                  {
+                    "id": "tx-1",
+                    "type": "transaction",
+                    "xdr": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+                  },
+                  {
+                    "id": "tx-2",
+                    "type": "ledger_key",
+                    "xdr": "AAAABgAAAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAAABQAAAAB",
+                  },
+                ],
+              },
+              "schema": {
+                "$ref": "#/components/schemas/DecodeBatchRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "results": [
+                    {
+                      "decoded": {
+                        "fee": 100,
+                        "operations": [],
+                      },
+                      "id": "tx-1",
+                      "success": true,
+                    },
+                    {
+                      "decoded": {
+                        "contractId": "CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE",
+                        "type": "contractData",
+                      },
+                      "id": "tx-2",
+                      "success": true,
+                    },
+                  ],
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/DecodeBatchResponse",
+                },
+              },
+            },
+            "description": "Batch decode completed",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Batch decode multiple XDR strings",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+    "/estimate-fee": {
+      "post": {
+        "description": "Returns a fee estimate given raw resource usage values (\`cpuInsns\`, \`memBytes\`).
+Invocation estimates accept an optional footprint to charge its exact XDR size.
+Select \`operationType: restore\` or \`extend\` and provide a transaction \`xdr\`
+or ledger \`footprint\` to simulate the corresponding operation. These estimates
+use current network fees and RPC rent pricing. CPU and memory fields are
+optional for restoration and extension; extensions built from a footprint
+also require \`extendTo\` (ledgers).
+",
+        "operationId": "estimateFee",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "cpuInsns": "1234567",
+                "memBytes": "8192",
+                "network": "testnet",
+              },
+              "schema": {
+                "$ref": "#/components/schemas/EstimateFeeRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "inclusionFee": "100",
+                  "network": "testnet",
+                  "resourceFee": "2450",
+                  "totalFee": "2550",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateFeeResponse",
+                },
+              },
+            },
+            "description": "Fee estimate calculated",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Estimate transaction fee",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/footprint/diff": {
+      "post": {
+        "description": "Computes added and removed read-only and read-write ledger keys between two
+transaction footprints (\`before\` and \`after\`).
+Set \`format=markdown\` for a table of additions, removals, and RO/RW access changes.
+",
+        "operationId": "diffFootprint",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "markdown",
+              ],
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FootprintDiffRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FootprintDiffResponse",
+                },
+              },
+              "text/markdown": {
+                "example": "| Change Type | Entry Type | Contract ID / Account | Access Mode |
+| --- | --- | --- | --- |
+| modified | Account | G... | RO → RW |
+",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
+            "description": "Footprint diff computed successfully",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Compare two Soroban transaction footprints",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/health": {
+      "get": {
+        "description": "Returns service liveness status. Deprecated — use \`/health/live\` instead.
+Kept for backwards compatibility with load balancers and uptime monitors.
+",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "ok",
+                  "timestamp": "2024-01-01T00:00:00.000Z",
+                  "uptime": 123.45,
+                  "version": "1.0.0",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse",
+                },
+              },
+            },
+            "description": "Service is running",
+          },
+        },
+        "summary": "Liveness check (deprecated alias)",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+    "/health/live": {
+      "get": {
+        "description": "Returns service liveness status. Use this endpoint with Kubernetes \`livenessProbe\`
+and load-balancer health checks.
+",
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "ok",
+                  "timestamp": "2024-01-01T00:00:00.000Z",
+                  "uptime": 123.45,
+                  "version": "1.0.0",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse",
+                },
+              },
+            },
+            "description": "Process is alive",
+          },
+        },
+        "summary": "Liveness check",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+    "/health/ready": {
+      "get": {
+        "description": "Returns readiness status. Checks whether the cache backend and RPC circuit breaker
+are healthy. Use with Kubernetes \`readinessProbe\` — traffic is only sent to pods
+that return \`200\` here.
+",
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "cache": {
+                      "details": {
+                        "backend": "redis",
+                      },
+                      "status": "healthy",
+                    },
+                    "rpcCircuitBreaker": {
+                      "details": {
+                        "failureCount": 0,
+                        "state": "closed",
+                      },
+                      "status": "healthy",
+                    },
+                  },
+                  "status": "ready",
+                  "timestamp": "2024-01-01T00:00:00.000Z",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse",
+                },
+              },
+            },
+            "description": "Service is ready to accept traffic",
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "checks": {
+                    "cache": {
+                      "details": {
+                        "error": "Connection refused",
+                      },
+                      "status": "unhealthy",
+                    },
+                    "rpcCircuitBreaker": {
+                      "details": {
+                        "failureCount": 0,
+                        "state": "closed",
+                      },
+                      "status": "healthy",
+                    },
+                  },
+                  "status": "not ready",
+                  "timestamp": "2024-01-01T00:00:00.000Z",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse",
+                },
+              },
+            },
+            "description": "Service is not ready (cache or RPC unhealthy)",
+          },
+        },
+        "summary": "Readiness check",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+    "/network/status": {
+      "get": {
+        "description": "Returns current Stellar network information including the latest ledger sequence
+and network passphrase. When \`network\` is omitted, queries all configured networks.
+Response is cached for 10 seconds.
+",
+        "operationId": "getNetworkStatus",
+        "parameters": [
+          {
+            "description": "Network to query (omit to query all configured networks)",
+            "in": "query",
+            "name": "network",
+            "required": false,
+            "schema": {
+              "enum": [
+                "testnet",
+                "mainnet",
+                "futurenet",
+              ],
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": {
+                    "latestLedger": 12345678,
+                    "passphrase": "Test SDF Network ; September 2015",
+                  },
+                  "success": true,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkStatusResponse",
+                },
+              },
+            },
+            "description": "Network status retrieved",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Network status",
+        "tags": [
+          "network",
+        ],
+      },
+    },
+    "/openapi.json": {
+      "get": {
+        "description": "Serves the raw OpenAPI specification as JSON.",
+        "operationId": "getOpenApiSpec",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OpenAPI specification",
+          },
+        },
+        "summary": "OpenAPI specification (JSON)",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+    "/restore": {
+      "post": {
+        "description": "Builds a restoration transaction for expired ledger entries referenced by the
+provided XDR. Submit this transaction to the network before retrying \`/simulate\`
+when you receive a \`422\` with \`"restoration required"\`.
+",
+        "operationId": "restore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "network": "testnet",
+                "xdr": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+              },
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": {
+                    "fee": "100",
+                    "needsRestore": true,
+                    "restoreXdr": "AAAAAgAAAAD...",
+                  },
+                  "success": true,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/EnvelopeResponse",
+                },
+              },
+            },
+            "description": "Restoration check completed",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable",
+          },
+        },
+        "summary": "Build a ledger entry restoration transaction",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/simulate": {
+      "post": {
+        "description": "Submits a transaction XDR to the Stellar RPC \`simulateTransaction\` endpoint,
+extracts the footprint (read-only and read-write ledger keys), and returns
+resource cost estimates.
+
+When \`webhookUrl\` (HTTPS) is supplied, returns \`202 Accepted\` with a \`jobId\`
+immediately and delivers the simulation payload asynchronously signed with
+\`X-Webhook-Signature\` (\`sha256=<hmac>\`).
+
+Results are cached by a hash of the request body. The \`X-Cache\` response header
+indicates whether the result was served from cache (\`HIT\`) or freshly simulated (\`MISS\`).
+",
+        "operationId": "simulate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "network": "testnet",
+                "xdr": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+              },
+              "schema": {
+                "$ref": "#/components/schemas/SimulateRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "cost": {
+                    "cpuInsns": "1234567",
+                    "memBytes": "8192",
+                  },
+                  "footprint": {
+                    "readOnly": [
+                      "AAAABgAAAAHZ...",
+                      "AAAABgAAAAHa...",
+                    ],
+                    "readWrite": [
+                      "AAAABgAAAAHb...",
+                    ],
+                  },
+                  "success": true,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SimulateSuccessResponse",
+                },
+              },
+            },
+            "description": "Simulation succeeded",
+            "headers": {
+              "X-Cache": {
+                "description": "Whether the result was served from cache",
+                "schema": {
+                  "enum": [
+                    "HIT",
+                    "MISS",
+                  ],
+                  "type": "string",
+                },
+              },
+              "X-Simulation-Mode": {
+                "description": "Simulation mode (live or dry-run)",
+                "schema": {
+                  "enum": [
+                    "live",
+                    "dry-run",
+                  ],
+                  "type": "string",
+                },
+              },
+            },
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "accepted": true,
+                  "jobId": "6fa459ea-ee8a-3ca4-894e-db77e160355e",
+                  "status": "pending",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAcceptedResponse",
+                },
+              },
+            },
+            "description": "Asynchronous simulation queued for webhook delivery",
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "MISSING_XDR",
+                  "error": "Missing required field: xdr",
+                  "success": false,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse",
+                },
+              },
+            },
+            "description": "Missing or invalid request body",
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "contractError": {
+                    "summary": "Contract execution error",
+                    "value": {
+                      "code": "RPC_SIMULATION_ERROR",
+                      "error": "contract panic: assertion failed",
+                      "success": false,
+                    },
+                  },
+                  "restoreRequired": {
+                    "summary": "Ledger entry restoration required",
+                    "value": {
+                      "code": "SIMULATION_RESTORE_REQUIRED",
+                      "error": "Transaction requires ledger entry restoration before simulation.",
+                      "success": false,
+                    },
+                  },
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SimulateFailureResponse",
+                },
+              },
+            },
+            "description": "Simulation failed (contract error or restoration required)",
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable",
+          },
+        },
+        "summary": "Simulate a Soroban transaction",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/simulate/batch": {
+      "post": {
+        "description": "Simulates up to 10 transactions concurrently. Each transaction is processed
+independently; failures in one entry do not affect others.
+
+The \`X-Cache\` header reflects aggregate cache status: \`HIT\` (all cached),
+\`PARTIAL\` (some cached), or \`MISS\` (none cached).
+",
+        "operationId": "simulateBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "network": "testnet",
+                "transactions": [
+                  {
+                    "xdr": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+                  },
+                  {
+                    "xdr": "AAAAAJ0NBMo4F1o4fTKd/qTtKmTK1qGVSM2xaCbhYQHyuYTVAAAAZAAAAAAAAAAoAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAAAAA==",
+                  },
+                ],
+              },
+              "schema": {
+                "$ref": "#/components/schemas/SimulateBatchRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "results": [
+                    {
+                      "cost": {
+                        "cpuInsns": "1234567",
+                        "memBytes": "8192",
+                      },
+                      "footprint": {
+                        "readOnly": [
+                          "AAAABgAAAAHZ...",
+                        ],
+                        "readWrite": [
+                          "AAAABgAAAAHb...",
+                        ],
+                      },
+                      "index": 0,
+                      "success": true,
+                    },
+                    {
+                      "error": "contract panic: assertion failed",
+                      "index": 1,
+                      "success": false,
+                    },
+                  ],
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SimulateBatchResponse",
+                },
+              },
+            },
+            "description": "Batch processed (individual results may contain errors)",
+            "headers": {
+              "X-Cache": {
+                "description": "Aggregate cache status across all results",
+                "schema": {
+                  "enum": [
+                    "HIT",
+                    "PARTIAL",
+                    "MISS",
+                  ],
+                  "type": "string",
+                },
+              },
+            },
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable",
+          },
+        },
+        "summary": "Simulate multiple Soroban transactions",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/simulate/cost-breakdown": {
+      "get": {
+        "description": "Returns a detailed breakdown of Soroban resource fees given raw CPU instruction
+and memory byte counts. Useful for building fee estimation UIs without running
+a full simulation.
+",
+        "operationId": "getCostBreakdown",
+        "parameters": [
+          {
+            "description": "CPU instructions count (non-negative integer string)",
+            "in": "query",
+            "name": "cpuInsns",
+            "required": true,
+            "schema": {
+              "example": "1234567",
+              "type": "string",
+            },
+          },
+          {
+            "description": "Memory bytes count (non-negative integer string)",
+            "in": "query",
+            "name": "memBytes",
+            "required": true,
+            "schema": {
+              "example": "8192",
+              "type": "string",
+            },
+          },
+          {
+            "description": "Stellar network to use for fee parameters",
+            "in": "query",
+            "name": "network",
+            "required": false,
+            "schema": {
+              "default": "testnet",
+              "enum": [
+                "testnet",
+                "mainnet",
+                "futurenet",
+              ],
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostBreakdownResponse",
+                },
+              },
+            },
+            "description": "Cost breakdown calculated successfully",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Detailed cost breakdown",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/simulate/dry-run": {
+      "post": {
+        "description": "Decodes the transaction envelope locally and returns source account, sequence
+number, and operation metadata without making any Stellar RPC network request.
+",
+        "operationId": "simulateDryRun",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "network": "testnet",
+                "xdr": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+              },
+              "schema": {
+                "$ref": "#/components/schemas/ValidateRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "dryRun": true,
+                  "network": "testnet",
+                  "operationCount": 1,
+                  "operations": [
+                    {
+                      "source": null,
+                      "type": "invokeHostFunction",
+                    },
+                  ],
+                  "sequence": "101",
+                  "sourceAccount": "GABC...",
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/DryRunResponse",
+                },
+              },
+            },
+            "description": "Transaction XDR parsed locally",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+        },
+        "summary": "Parse transaction XDR locally without calling RPC",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/simulate/history": {
+      "get": {
+        "description": "Returns up to the last 100 simulation summaries recorded for the caller's IP
+address within a rolling 24-hour TTL window.
+",
+        "operationId": "getSimulateHistory",
+        "parameters": [
+          {
+            "description": "Maximum number of history entries to return (1–100)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulateHistoryResponse",
+                },
+              },
+            },
+            "description": "Simulation history retrieved",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Recent simulation history for caller IP",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/simulate/jobs/{jobId}": {
+      "get": {
+        "description": "Returns delivery status (\`pending\`, \`delivered\`, or \`failed\`), attempt count,
+and timestamps for an asynchronous webhook simulation job queued via \`/simulate\`.
+",
+        "operationId": "getSimulationJob",
+        "parameters": [
+          {
+            "description": "Job identifier returned in the \`202 Accepted\` \`/simulate\` response",
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookJobResponse",
+                },
+              },
+            },
+            "description": "Webhook simulation job status retrieved",
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "JOB_NOT_FOUND",
+                  "error": "Webhook job not found",
+                  "success": false,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse",
+                },
+              },
+            },
+            "description": "Webhook job not found",
+          },
+        },
+        "summary": "Inspect async webhook simulation job status",
+        "tags": [
+          "simulation",
+        ],
+      },
+    },
+    "/simulate/supported-networks": {
+      "get": {
+        "description": "Returns the list of Stellar networks (\`testnet\`, \`mainnet\`, \`futurenet\`)
+that currently have RPC URLs configured on the server.
+",
+        "operationId": "getSupportedNetworks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "networks": [
+                    "testnet",
+                    "mainnet",
+                  ],
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SupportedNetworksResponse",
+                },
+              },
+            },
+            "description": "Configured networks retrieved",
+          },
+        },
+        "summary": "List configured RPC networks",
+        "tags": [
+          "network",
+        ],
+      },
+    },
+    "/validate": {
+      "post": {
+        "description": "Validates a transaction XDR locally without simulating it against the network.
+Detects malformed XDR, passphrase mismatches, zero/empty operation lists, and
+emits warnings for non-Soroban operations or \`0\` sequence numbers.
+",
+        "operationId": "validateXdr",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "network": "testnet",
+                "xdr": "AAAAAgAAAACnDQTKOBdaOH0ynf6k7SpkytahlUjNsWgm4WEB8rmE1QAAAGQAAAAAAAAAZwAAAAEAAAAAAAAAAAAAAABp6joKAAAAAAAAAAEAAAAAAAAAGAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAQAAAAAAAAAAAAAAAfK5hNUAAABAIbPVF4x6vSLx/J3T0SDhvTNtytA/BNO+qMJ74p/b3Y8xpBhR7xzy68FuEyffaF9fNXHEC+77WK+oOJpfon1tCg==",
+              },
+              "schema": {
+                "$ref": "#/components/schemas/ValidateRequest",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": {
+                    "errors": [],
+                    "network": "testnet",
+                    "valid": true,
+                    "warnings": [],
+                  },
+                  "success": true,
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateResponse",
+                },
+              },
+            },
+            "description": "XDR validation completed",
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest",
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError",
+          },
+        },
+        "summary": "Validate transaction XDR",
+        "tags": [
+          "utilities",
+        ],
+      },
+    },
+  },
+  "servers": [
+    {
+      "description": "Current API version (same-origin)",
+      "url": "/api/v1",
+    },
+    {
+      "description": "Local Development Server (Testnet)",
+      "url": "http://localhost:3000/api/v1",
+    },
+  ],
+  "tags": [
+    {
+      "description": "Transaction simulation and footprint extraction",
+      "name": "simulation",
+    },
+    {
+      "description": "XDR decoding, health checks, and cache management",
+      "name": "utilities",
+    },
+    {
+      "description": "Network status and information",
+      "name": "network",
+    },
+  ],
+}
+`;
