@@ -34,7 +34,7 @@ import { requestIdMiddleware } from "./middleware/requestId";
 import { requestLogger } from "./middleware/requestLogger";
 import { responseTimeMiddleware } from "./middleware/responseTime";
 import { timeoutMiddleware } from "./middleware/timeout";
-import { closeCache, getCache } from "./services/cache";
+import { closeCache, getCache, getCacheHealth } from "./services/cache";
 import { logger } from "./utils/logger";
 
 const app = express();
@@ -347,55 +347,66 @@ if (process.env.NODE_ENV !== "production") {
       unknown
     >;
 
-    const { apiReference } =
-      require("@scalar/express-api-reference") as typeof import("@scalar/express-api-reference");
+    let apiReference:
+      | ((opts: Record<string, unknown>) => express.RequestHandler)
+      | undefined;
+    try {
+      const scalarPkg = "@scalar/express-api-reference";
+      ({ apiReference } = require(scalarPkg) as {
+        apiReference: (opts: Record<string, unknown>) => express.RequestHandler;
+      });
+    } catch {
+      apiReference = undefined;
+    }
 
-    // Relax CSP for the interactive API playground so Scalar assets and Testnet
-    // "Try It" requests work in non-production environments.
-    const docsCspMiddleware: express.RequestHandler = (_req, res, next) => {
-      res.setHeader(
-        "Content-Security-Policy",
-        [
-          "default-src 'self'",
-          "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-          "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
-          "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
-          "img-src 'self' data: https:",
-          "connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://soroban-rpc.mainnet.stellar.gateway.fm",
-        ].join("; "),
-      );
-      next();
-    };
+    if (apiReference) {
+      // Relax CSP for the interactive API playground so Scalar assets and Testnet
+      // "Try It" requests work in non-production environments.
+      const docsCspMiddleware: express.RequestHandler = (_req, res, next) => {
+        res.setHeader(
+          "Content-Security-Policy",
+          [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
+            "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+            "img-src 'self' data: https:",
+            "connect-src 'self' https://soroban-testnet.stellar.org https://horizon-testnet.stellar.org https://soroban-rpc.mainnet.stellar.gateway.fm",
+          ].join("; "),
+        );
+        next();
+      };
 
-    const scalarHandler = apiReference({
-      spec: { content: spec },
-      theme: "purple",
-      layout: "modern",
-      showSidebar: true,
-      defaultHttpClient: {
-        targetKey: "js",
-        clientKey: "fetch",
-      },
-      hiddenClients: [],
-      authentication: {
-        preferredSecurityScheme: "ApiKeyHeader",
-        apiKey: {
-          token: process.env.API_KEY || "testnet-demo-key",
+      const scalarHandler = apiReference({
+        spec: { content: spec },
+        theme: "purple",
+        layout: "modern",
+        showSidebar: true,
+        defaultHttpClient: {
+          targetKey: "js",
+          clientKey: "fetch",
         },
-      },
-      metaData: {
-        title: "Stellar Footprint Service — Interactive API Playground",
-      },
-      customCss: `
+        hiddenClients: [],
+        authentication: {
+          preferredSecurityScheme: "ApiKeyHeader",
+          apiKey: {
+            token: process.env.API_KEY || "testnet-demo-key",
+          },
+        },
+        metaData: {
+          title: "Stellar Footprint Service — Interactive API Playground",
+        },
+        customCss: `
         @media (max-width: 768px) {
           .scalar-api-reference { font-size: 14px; }
           .scalar-card, pre, code { max-width: 100%; overflow-x: auto; }
         }
       `,
-    });
+      });
 
-    app.use("/api/docs", docsCspMiddleware, scalarHandler);
-    app.use("/api/reference", docsCspMiddleware, scalarHandler);
+      app.use("/api/docs", docsCspMiddleware, scalarHandler);
+      app.use("/api/reference", docsCspMiddleware, scalarHandler);
+    }
   }
 }
 
@@ -453,8 +464,8 @@ if (require.main === module) {
   // serving traffic. Errors are logged as warnings, never fatal.
   void (async () => {
     try {
-      const cache = await getCache();
-      if (cache.isRedisHealthy()) {
+      getCache();
+      if (getCacheHealth().redis === "healthy") {
         logger.info("Cache initialized with Redis backend");
       } else {
         logger.warn(

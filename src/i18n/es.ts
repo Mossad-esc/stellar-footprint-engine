@@ -35,4 +35,10 @@ export const es = {
     "Servicio temporalmente no disponible. Por favor, reintente más tarde.",
   JOB_NOT_FOUND: "Trabajo de webhook no encontrado",
   UNAUTHORIZED: "No autorizado",
+  XDR_DEPTH_EXCEEDED: "Se superó el límite de profundidad o nodos de XDR",
+  INVALID_CONTRACT_ID:
+    "ID de contrato inválido: debe ser un StrKey de contrato Stellar válido",
+  PAYLOAD_TOO_LARGE: "Carga demasiado grande",
+  RPC_PAYLOAD_TOO_LARGE:
+    "La carga de respuesta RPC superó el tamaño máximo permitido",
 } as const;

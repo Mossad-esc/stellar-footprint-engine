@@ -1,10 +1,20 @@
 import { createHash } from "crypto";
 import * as v8 from "v8";
+import {
+  brotliCompressSync,
+  brotliDecompressSync,
+  gunzipSync,
+  gzipSync,
+} from "zlib";
 
+import { env } from "../config/env";
+import { CACHE_KEY_ROOT, CACHE_SCHEMA_VERSION } from "../constants";
 import metrics from "../middleware/metrics";
 import { logger } from "../utils/logger";
-import { env } from "../config/env";
-import { CACHE_SCHEMA_VERSION, cacheKeyPrefix } from "../constants";
+
+function cacheKeyPrefix(suffix: string): string {
+  return `${CACHE_KEY_ROOT}:${CACHE_SCHEMA_VERSION}:${suffix}`;
+}
 
 // ioredis is lazy-loaded only when REDIS_URL is present to avoid the ~40ms
 // module-parse cost during cold starts where Redis is not configured.
@@ -32,7 +42,7 @@ export interface CacheService {
   delete(key: string): Promise<void>;
   flush(): Promise<void>;
   /** Which backend is currently active */
-  readonly backend: "redis" | "memory" | "cluster" | "sentinel";
+  readonly backend: "redis" | "memory" | "cluster" | "sentinel" | "tiered";
   /** Whether stale-while-revalidate is enabled */
   readonly staleWhileRevalidate: boolean;
   /**
@@ -82,6 +92,35 @@ export function getCacheHealth(): CacheHealth {
     schemaVersion: CACHE_SCHEMA_VERSION,
   };
 }
+
+export function isCacheFallbackEnabled(): boolean {
+  return ALLOW_CACHE_FALLBACK;
+}
+
+export function getCacheStatus(): CacheHealth {
+  return getCacheHealth();
+}
+
+export async function invalidateContractCache(
+  contractId: string,
+): Promise<number> {
+  return getCache().invalidateContractCache(contractId);
+}
+
+export const redisClient = {
+  set: async (
+    ...args: [string, string, ...unknown[]]
+  ): Promise<string | null> => {
+    if (!_redisClient) {
+      throw new Error("Redis client is not initialized");
+    }
+    return (
+      _redisClient as unknown as {
+        set: (...a: [string, string, ...unknown[]]) => Promise<string | null>;
+      }
+    ).set(...args);
+  },
+};
 
 /** Marks the Redis backend healthy/unhealthy (used by event listeners). */
 export function setRedisHealth(status: RedisHealthStatus): void {
@@ -179,11 +218,17 @@ function compressValue(value: string): string {
 
 function decompressValue(value: string): string {
   if (value.startsWith(COMPRESSION_PREFIX_BROTLI)) {
-    const data = Buffer.from(value.slice(COMPRESSION_PREFIX_BROTLI.length), "base64");
+    const data = Buffer.from(
+      value.slice(COMPRESSION_PREFIX_BROTLI.length),
+      "base64",
+    );
     return brotliDecompressSync(data).toString("utf8");
   }
   if (value.startsWith(COMPRESSION_PREFIX_GZIP)) {
-    const data = Buffer.from(value.slice(COMPRESSION_PREFIX_GZIP.length), "base64");
+    const data = Buffer.from(
+      value.slice(COMPRESSION_PREFIX_GZIP.length),
+      "base64",
+    );
     return gunzipSync(data).toString("utf8");
   }
   return value; // Uncompressed (backward compatible)
@@ -203,7 +248,7 @@ class AsyncLruMemoryCache implements CacheService {
   private readonly tagIndex = new Map<string, Set<string>>(); // contractId -> Set<cacheKey>
   private readonly maxSize: number;
   private readonly swrMs: number;
-  private let estimatedTotalBytes = 0;
+  private estimatedTotalBytes = 0;
 
   constructor(maxSize = DEFAULT_MAX_SIZE, swrMs = CACHE_SWR_MS) {
     this.maxSize = maxSize;
@@ -216,8 +261,8 @@ class AsyncLruMemoryCache implements CacheService {
   }
 
   private updateMetrics(): void {
-    metrics.recordMemoryCacheKeys(this.store.size);
-    metrics.recordMemoryCacheBytes(this.estimatedTotalBytes);
+    metrics.recordMemoryCacheKeys?.(this.store.size);
+    metrics.recordMemoryCacheBytes?.(this.estimatedTotalBytes);
   }
 
   private maybeEmergencyTrim(): void {
@@ -227,14 +272,16 @@ class AsyncLruMemoryCache implements CacheService {
     const ratio = limit > 0 ? used / limit : 0;
 
     if (ratio >= env.CACHE_HEAP_SAFETY_THRESHOLD) {
-      const targetRemovals = Math.ceil(this.store.size * env.CACHE_EMERGENCY_TRIM_RATIO);
+      const targetRemovals = Math.ceil(
+        this.store.size * env.CACHE_EMERGENCY_TRIM_RATIO,
+      );
       let removed = 0;
       for (const key of this.store.keys()) {
         this.evictEntry(key);
         removed++;
         if (removed >= targetRemovals) break;
       }
-      metrics.recordEmergencyTrim();
+      metrics.recordEmergencyTrim?.();
       logger.warn(
         { heapRatio: ratio, removed, remaining: this.store.size },
         "Emergency cache trim triggered due to heap pressure",
@@ -257,7 +304,7 @@ class AsyncLruMemoryCache implements CacheService {
       }
     }
     this.store.delete(key);
-    metrics.recordCacheEviction("memory");
+    metrics.recordCacheEviction?.("memory");
   }
 
   async get<T>(key: string): Promise<T | null> {
@@ -265,13 +312,13 @@ class AsyncLruMemoryCache implements CacheService {
 
     const entry = this.store.get(key);
     if (!entry) {
-      metrics.recordCacheOperation("memory", "get", "miss");
+      metrics.recordCacheOperation?.("memory", "get", "miss");
       return null;
     }
 
     if (Date.now() > entry.expiresAt) {
       this.evictEntry(key);
-      metrics.recordCacheOperation("memory", "get", "miss");
+      metrics.recordCacheOperation?.("memory", "get", "miss");
       return null;
     }
 
@@ -279,7 +326,7 @@ class AsyncLruMemoryCache implements CacheService {
     this.store.delete(key);
     this.store.set(key, entry);
 
-    metrics.recordCacheOperation("memory", "get", "hit");
+    metrics.recordCacheOperation?.("memory", "get", "hit");
     this.updateMetrics();
     return entry.value as T;
   }
@@ -289,14 +336,14 @@ class AsyncLruMemoryCache implements CacheService {
   ): Promise<{ value: T; isStale: boolean } | null> {
     const entry = this.store.get(key);
     if (!entry) {
-      metrics.recordCacheOperation("memory", "get", "miss");
+      metrics.recordCacheOperation?.("memory", "get", "miss");
       return null;
     }
 
     const now = Date.now();
     if (now > entry.expiresAt) {
       this.evictEntry(key);
-      metrics.recordCacheOperation("memory", "get", "miss");
+      metrics.recordCacheOperation?.("memory", "get", "miss");
       return null;
     }
 
@@ -305,7 +352,7 @@ class AsyncLruMemoryCache implements CacheService {
     this.store.set(key, entry);
 
     const isStale = entry.staleAt !== undefined && now > entry.staleAt;
-    metrics.recordCacheOperation("memory", "get", isStale ? "hit" : "hit");
+    metrics.recordCacheOperation?.("memory", "get", isStale ? "hit" : "hit");
     this.updateMetrics();
     return { value: entry.value as T, isStale };
   }
@@ -334,7 +381,13 @@ class AsyncLruMemoryCache implements CacheService {
     }
 
     this.estimatedTotalBytes += sizeBytes;
-    this.store.set(key, { value, expiresAt: now + ttlMs, staleAt, sizeBytes, contractIds });
+    this.store.set(key, {
+      value,
+      expiresAt: now + ttlMs,
+      staleAt,
+      sizeBytes,
+      contractIds,
+    });
 
     // Update tag index
     for (const cid of contractIds) {
@@ -346,7 +399,7 @@ class AsyncLruMemoryCache implements CacheService {
       set.add(key);
     }
 
-    metrics.recordCacheOperation("memory", "set", "success");
+    metrics.recordCacheOperation?.("memory", "set", "success");
     this.updateMetrics();
   }
 
@@ -374,7 +427,7 @@ class AsyncLruMemoryCache implements CacheService {
 
   async delete(key: string): Promise<void> {
     this.evictEntry(key);
-    metrics.recordCacheOperation("memory", "delete", "success");
+    metrics.recordCacheOperation?.("memory", "delete", "success");
     this.updateMetrics();
   }
 
@@ -382,7 +435,7 @@ class AsyncLruMemoryCache implements CacheService {
     this.store.clear();
     this.tagIndex.clear();
     this.estimatedTotalBytes = 0;
-    metrics.recordCacheOperation("memory", "flush", "success");
+    metrics.recordCacheOperation?.("memory", "flush", "success");
     this.updateMetrics();
   }
 
@@ -407,6 +460,8 @@ class AsyncLruMemoryCache implements CacheService {
 
 class RedisCache implements CacheService {
   readonly backend: "redis" | "cluster" | "sentinel";
+  readonly isCluster: boolean;
+  readonly isSentinel: boolean;
   readonly staleWhileRevalidate: boolean;
 
   private readonly swrMs: number;
@@ -428,15 +483,21 @@ class RedisCache implements CacheService {
     return this.client;
   }
 
+  private k(key: string): string {
+    return key.startsWith(`${CACHE_KEY_ROOT}:${CACHE_SCHEMA_VERSION}:`)
+      ? key
+      : cacheKeyPrefix(key);
+  }
+
   async get<T>(key: string): Promise<T | null> {
     const start = Date.now();
-    const raw = await this.client.get(key);
-    metrics.recordCacheLatency("get", "redis", (Date.now() - start) / 1000);
+    const raw = await this.client.get(this.k(key));
+    metrics.recordCacheLatency?.("get", "redis", (Date.now() - start) / 1000);
     if (raw === null) {
-      metrics.recordCacheOperation("redis", "get", "miss");
+      metrics.recordCacheOperation?.("redis", "get", "miss");
       return null;
     }
-    metrics.recordCacheOperation("redis", "get", "hit");
+    metrics.recordCacheOperation?.("redis", "get", "hit");
     return JSON.parse(decompressValue(raw)) as T;
   }
 
@@ -444,43 +505,47 @@ class RedisCache implements CacheService {
     key: string,
   ): Promise<{ value: T; isStale: boolean } | null> {
     const start = Date.now();
+    const namespaced = this.k(key);
     const client = await this.getClient();
     const [raw, ttlMs] = await Promise.all([
-      client.get(key),
-      client.pttl(key),
+      client.get(namespaced),
+      client.pttl(namespaced),
     ]);
-    metrics.recordCacheLatency("get", "redis", (Date.now() - start) / 1000);
+    metrics.recordCacheLatency?.("get", "redis", (Date.now() - start) / 1000);
     if (raw === null) {
-      metrics.recordCacheOperation("redis", "get", "miss");
+      metrics.recordCacheOperation?.("redis", "get", "miss");
       return null;
     }
     const value = JSON.parse(decompressValue(raw)) as T;
     const isStale =
       this.staleWhileRevalidate && ttlMs >= 0 && ttlMs < this.swrMs;
-    metrics.recordCacheOperation("redis", "get", isStale ? "hit" : "hit");
+    metrics.recordCacheOperation?.("redis", "get", isStale ? "hit" : "hit");
     return { value, isStale };
   }
 
   async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
     const start = Date.now();
-    const client = await this.getClient();
+    const namespaced = this.k(key);
     const json = JSON.stringify(value);
     const finalValue = shouldCompress(json) ? compressValue(json) : json;
     // PX = millisecond precision TTL
-    await this.client.set(key, finalValue, "PX", ttlMs);
-    metrics.recordCacheLatency("set", "redis", (Date.now() - start) / 1000);
+    await this.client.set(namespaced, finalValue, "PX", ttlMs);
+    metrics.recordCacheLatency?.("set", "redis", (Date.now() - start) / 1000);
 
     // Index contract IDs in Redis Sets
     const contractIds = this.extractContractIds(value);
     if (contractIds.length > 0) {
       const pipeline = this.client.pipeline();
       for (const cid of contractIds) {
-        pipeline.sadd(`${this.tagPrefix}${cid}`, key);
-        pipeline.expire(`${this.tagPrefix}${cid}`, Math.ceil(ttlMs / 1000) + 60);
+        pipeline.sadd(`${this.tagPrefix}${cid}`, namespaced);
+        pipeline.expire(
+          `${this.tagPrefix}${cid}`,
+          Math.ceil(ttlMs / 1000) + 60,
+        );
       }
       await pipeline.exec();
     }
-    metrics.recordCacheOperation("redis", "set", "success");
+    metrics.recordCacheOperation?.("redis", "set", "success");
   }
 
   private extractContractIds(value: unknown): string[] {
@@ -506,28 +571,50 @@ class RedisCache implements CacheService {
   }
 
   async delete(key: string): Promise<void> {
-    await this.client.del(key);
-    metrics.recordCacheOperation("redis", "delete", "success");
+    await this.client.del(this.k(key));
+    metrics.recordCacheOperation?.("redis", "delete", "success");
   }
 
   async flush(): Promise<void> {
     await this.client.flushdb();
-    metrics.recordCacheOperation("redis", "flush", "success");
+    metrics.recordCacheOperation?.("redis", "flush", "success");
   }
 
   async invalidateContractCache(contractId: string): Promise<number> {
     const tagKey = `${this.tagPrefix}${contractId}`;
-    const keys = await this.client.smembers(tagKey);
-    if (!keys.length) return 0;
+    const tagged = await this.client.smembers(tagKey);
+    const keysToDelete = new Set<string>(tagged);
+
+    // Also scan for keys containing the contractId directly
+    if (typeof this.client.scan === "function") {
+      let cursor = "0";
+      do {
+        const [nextCursor, matched] = await this.client.scan(
+          cursor,
+          "MATCH",
+          `*${contractId}*`,
+          "COUNT",
+          100,
+        );
+        cursor = nextCursor;
+        for (const k of matched) {
+          if (k !== tagKey) keysToDelete.add(k);
+        }
+      } while (cursor !== "0");
+    }
+
+    if (keysToDelete.size === 0) return 0;
 
     const pipeline = this.client.pipeline();
-    for (const key of keys) {
+    for (const key of keysToDelete) {
       pipeline.del(key);
     }
-    pipeline.del(tagKey);
+    if (tagged.length > 0) {
+      pipeline.del(tagKey);
+    }
     await pipeline.exec();
-    metrics.recordCacheEviction("redis");
-    return keys.length;
+    metrics.recordCacheEviction?.("redis");
+    return keysToDelete.size;
   }
 
   /**
@@ -575,7 +662,9 @@ const L1_TTL_MS = 15_000;
 const L2_TTL_MS = 60_000;
 
 export class TieredCache implements CacheService {
-  readonly backend = "tiered" as const;
+  get backend(): "redis" | "memory" | "cluster" | "sentinel" | "tiered" {
+    return this.l2 ? this.l2.backend : this.l1.backend;
+  }
   readonly staleWhileRevalidate: boolean;
 
   private readonly l1: AsyncLruMemoryCache;
@@ -590,22 +679,30 @@ export class TieredCache implements CacheService {
   async get<T>(key: string): Promise<T | null> {
     const l1Hit = await this.l1.get<T>(key);
     if (l1Hit !== null) {
-      metrics.recordL1Hit("simulation");
+      metrics.recordL1Hit?.("simulation");
       return l1Hit;
     }
-    metrics.recordL1Miss("simulation");
+    metrics.recordL1Miss?.("simulation");
 
     if (this.l2) {
       const l2Hit = await this.l2.get<T>(key);
       if (l2Hit !== null) {
-        metrics.recordL2Hit("simulation");
+        metrics.recordL2Hit?.("simulation");
         await this.l1.set(key, l2Hit, L1_TTL_MS);
         return l2Hit;
       }
     }
-    metrics.recordL2Miss("simulation");
+    metrics.recordL2Miss?.("simulation");
 
     return null;
+  }
+
+  async invalidateContractCache(contractId: string): Promise<number> {
+    const l1Count = await this.l1.invalidateContractCache(contractId);
+    if (this.l2) {
+      return this.l2.invalidateContractCache(contractId);
+    }
+    return l1Count;
   }
 
   async getWithMeta<T>(
@@ -613,20 +710,20 @@ export class TieredCache implements CacheService {
   ): Promise<{ value: T; isStale: boolean } | null> {
     const l1Hit = await this.l1.getWithMeta<T>(key);
     if (l1Hit) {
-      metrics.recordL1Hit("simulation");
+      metrics.recordL1Hit?.("simulation");
       return l1Hit;
     }
-    metrics.recordL1Miss("simulation");
+    metrics.recordL1Miss?.("simulation");
 
     if (this.l2) {
       const l2Hit = await this.l2.getWithMeta<T>(key);
       if (l2Hit) {
-        metrics.recordL2Hit("simulation");
+        metrics.recordL2Hit?.("simulation");
         await this.l1.set(key, l2Hit.value, L1_TTL_MS);
         return l2Hit;
       }
     }
-    metrics.recordL2Miss("simulation");
+    metrics.recordL2Miss?.("simulation");
 
     return null;
   }
@@ -676,7 +773,10 @@ function buildRedisClient(): RedisClient | ClusterClient | null {
       return { host: h, port: parseInt(p || "26379", 10) };
     });
     const masterName = process.env.REDIS_SENTINEL_MASTER_NAME || "mymaster";
-    logger.info({ sentinels, masterName }, "Initializing Redis Sentinel client");
+    logger.info(
+      { sentinels, masterName },
+      "Initializing Redis Sentinel client",
+    );
     return new Redis({
       sentinels,
       name: masterName,
@@ -698,15 +798,17 @@ function buildRedisClient(): RedisClient | ClusterClient | null {
       const [h, p] = node.trim().split(":");
       return { host: h, port: parseInt(p || "6379", 10) };
     });
-    const maxRedirections = parseInt(process.env.REDIS_CLUSTER_MAX_REDIRECTIONS || "16", 10);
+    const maxRedirections = parseInt(
+      process.env.REDIS_CLUSTER_MAX_REDIRECTIONS || "16",
+      10,
+    );
     logger.info({ nodes }, "Initializing Redis Cluster client");
     return new Redis.Cluster(nodes, {
       maxRedirections,
-      connectTimeout: 2000,
-      maxRetriesPerRequest: 1,
+      redisOptions: { connectTimeout: 2000, maxRetriesPerRequest: 1 },
       enableOfflineQueue: false,
       lazyConnect: false,
-      retryStrategy: (times: number) => {
+      clusterRetryStrategy: (times: number) => {
         if (times > 10) return null;
         return Math.min(times * 100, 3000);
       },
@@ -740,12 +842,12 @@ export function getCache(): CacheService {
   if (client) {
     try {
       _redisClient = client;
-      const backendType: "redis" | "cluster" | "sentinel" =
-        process.env.REDIS_CLUSTER_NODES
-          ? "cluster"
-          : process.env.REDIS_SENTINEL_HOSTS
-            ? "sentinel"
-            : "redis";
+      const backendType: "redis" | "cluster" | "sentinel" = process.env
+        .REDIS_CLUSTER_NODES
+        ? "cluster"
+        : process.env.REDIS_SENTINEL_HOSTS
+          ? "sentinel"
+          : "redis";
 
       const l2 = new RedisCache(client, CACHE_SWR_MS, backendType);
 
@@ -757,9 +859,7 @@ export function getCache(): CacheService {
           );
           return;
         }
-        logger.warn(
-          "Redis unavailable — falling back to L1-only cache",
-        );
+        logger.warn("Redis unavailable — falling back to L1-only cache");
         if (!_cache || _cache.backend !== "tiered") {
           _cache = new TieredCache(l1);
         }
@@ -768,7 +868,10 @@ export function getCache(): CacheService {
       // Attach the error listener immediately so an unreachable host never
       // throws an unhandled 'error' event and crashes the Node process.
       client.on("error", (err: Error) => {
-        logger.warn({ err: err.message }, "Redis error — marking cache unhealthy");
+        logger.warn(
+          { err: err.message },
+          "Redis error — marking cache unhealthy",
+        );
         scheduleFallback();
       });
 
@@ -782,7 +885,10 @@ export function getCache(): CacheService {
       });
 
       client.on("reconnecting", () => {
-        logger.warn({ attempt: _reconnectAttempts + 1 }, "Redis reconnecting...");
+        logger.warn(
+          { attempt: _reconnectAttempts + 1 },
+          "Redis reconnecting...",
+        );
         _reconnectAttempts++;
       });
 
@@ -794,6 +900,7 @@ export function getCache(): CacheService {
       client.on("ready", () => {
         logger.info("Redis cache ready — restoring L2 backend");
         setRedisHealth("healthy");
+        void l1.flush();
         if (!_cache || _cache.backend !== "tiered") {
           _cache = new TieredCache(l1, l2);
         }
@@ -801,9 +908,15 @@ export function getCache(): CacheService {
 
       setRedisHealth("healthy");
       _cache = new TieredCache(l1, l2);
-      logger.info({ backend: backendType }, "Cache backend: tiered (L1 memory + L2 Redis)");
+      logger.info(
+        { backend: backendType },
+        "Cache backend: tiered (L1 memory + L2 Redis)",
+      );
     } catch (err) {
-      logger.warn({ err }, "Failed to initialise Redis — falling back to L1-only cache");
+      logger.warn(
+        { err },
+        "Failed to initialise Redis — falling back to L1-only cache",
+      );
       setRedisHealth("unhealthy");
       _cache = new TieredCache(l1);
     }
@@ -813,7 +926,7 @@ export function getCache(): CacheService {
     logger.info("Cache backend: L1 memory LRU (REDIS_URL not set)");
   }
 
-  return _cache;
+  return _cache!;
 }
 
 /**

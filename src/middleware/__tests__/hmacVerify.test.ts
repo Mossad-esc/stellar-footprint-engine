@@ -19,9 +19,9 @@ const BODY = { event: "simulate.complete", id: "abc123" };
 
 // Mock the Redis client so tests never require a live server.
 const mockSet = jest.fn();
-jest.mock("../../lib/redis", () => ({
+jest.mock("../../services/cache", () => ({
   __esModule: true,
-  default: { set: (...args: unknown[]) => mockSet(...args) },
+  redisClient: { set: (...args: unknown[]) => mockSet(...args) },
 }));
 
 function sign(body: object, secret: string): string {

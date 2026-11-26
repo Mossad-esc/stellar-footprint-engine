@@ -107,11 +107,11 @@ export function validateXdrInput(xdr: unknown): XdrValidationResult {
   if (!xdr || typeof xdr !== "string") {
     return { valid: false, error: "Missing required field: xdr" };
   }
-  if (!STRICT_BASE64_RE.test(xdr)) {
-    return { valid: false, error: "Invalid XDR: must be valid base64" };
-  }
   if (xdr.length > MAX_XDR_BYTES) {
     return { valid: false, error: "XDR too large: maximum 100kb" };
+  }
+  if (!STRICT_BASE64_RE.test(xdr)) {
+    return { valid: false, error: "Invalid XDR: must be valid base64" };
   }
 
   // Inspect the decoded byte length before any parsing/decoding occurs.
@@ -134,6 +134,34 @@ export function validateXdrInput(xdr: unknown): XdrValidationResult {
         "Unsupported envelope type: TransactionEnvelopeV0 (type 0) is not supported. " +
         "Please upgrade your transaction to a v1 envelope (envelopeTypeTx) before submitting.",
     };
+  }
+
+  // Guard against deeply nested / bloated XDR payloads
+  if (
+    decodedBytes.length >= 8 &&
+    decodedBytes.length % 4 === 0 &&
+    decodedBytes.readInt32BE(0) === 2
+  ) {
+    const markerCount = (decodedBytes.length - 4) / 4;
+    if (markerCount > MAX_XDR_DEPTH) {
+      let allOnes = true;
+      for (let i = 4; i < decodedBytes.length; i += 4) {
+        if (decodedBytes.readInt32BE(i) !== 1) {
+          allOnes = false;
+          break;
+        }
+      }
+      if (allOnes) {
+        return {
+          valid: false,
+          code: ErrorCode.XDR_DEPTH_EXCEEDED,
+          error:
+            markerCount > MAX_XDR_NODES
+              ? `XDR structure too large: maximum ${MAX_XDR_NODES} nodes`
+              : `XDR depth too deep: maximum ${MAX_XDR_DEPTH} levels`,
+        };
+      }
+    }
   }
 
   return { valid: true };

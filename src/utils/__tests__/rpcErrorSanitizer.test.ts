@@ -139,12 +139,12 @@ describe("sanitizeRpcError", () => {
           message: "failed to decode transaction XDR",
         },
       };
-      expect(sanitizeRpcError(jsonRpcError)).toBe(
-        "Invalid transaction XDR provided.",
-      );
-      expect(sanitizeRpcError(JSON.stringify(jsonRpcError))).toBe(
-        "Invalid transaction XDR provided.",
-      );
+      expect(sanitizeRpcError(jsonRpcError)).toEqual({
+        message: "Invalid transaction XDR provided.",
+      });
+      expect(sanitizeRpcError(JSON.stringify(jsonRpcError))).toEqual({
+        message: "Invalid transaction XDR provided.",
+      });
     });
 
     it("handles raw HTML error page from Cloudflare proxy without leaking markup", () => {
@@ -154,11 +154,11 @@ describe("sanitizeRpcError", () => {
   <body><h1>502 Bad Gateway</h1><p>Ray ID: 8a1b2c3d4e5f</p></body>
 </html>`;
       const result = sanitizeRpcError(htmlPage);
-      expect(result).toBe(
-        "RPC service returned an unexpected error. Please try again.",
-      );
-      expect(result).not.toContain("<html");
-      expect(result).not.toContain("Cloudflare");
+      expect(result).toEqual({
+        message: "RPC service returned an unexpected error. Please try again.",
+      });
+      expect(result.message).not.toContain("<html");
+      expect(result.message).not.toContain("Cloudflare");
     });
 
     it("handles Axios network timeout error (ETIMEDOUT)", () => {
@@ -166,11 +166,15 @@ describe("sanitizeRpcError", () => {
         isAxiosError: true,
         code: "ETIMEDOUT",
         message: "timeout of 10000ms exceeded",
-        config: { url: "https://internal-rpc.example.com/v1/secretkey1234567890" },
+        config: {
+          url: "https://internal-rpc.example.com/v1/secretkey1234567890",
+        },
       };
       const result = sanitizeRpcError(axiosTimeout);
-      expect(result).toBe("RPC network error. Please try again.");
-      expect(result).not.toContain("internal-rpc");
+      expect(result).toEqual({
+        message: "RPC network error. Please try again.",
+      });
+      expect(result.message).not.toContain("internal-rpc");
     });
 
     it("handles Stellar Core host panic error with nested diagnostic events", () => {
@@ -183,7 +187,8 @@ describe("sanitizeRpcError", () => {
             {
               event: {
                 type: "diagnostic",
-                contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                contractId:
+                  "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 topics: ["fn_call"],
               },
             },
@@ -191,20 +196,26 @@ describe("sanitizeRpcError", () => {
         },
       };
       const result = sanitizeRpcError(hostPanic);
-      expect(result).toBe("Contract execution failed during simulation.");
-      expect(result).not.toContain("soroban-env-host");
-      expect(result).not.toContain("diagnosticEvents");
+      expect(result).toEqual({
+        message: "Contract execution failed during simulation.",
+      });
+      expect(result.message).not.toContain("soroban-env-host");
+      expect(result.message).not.toContain("diagnosticEvents");
     });
 
     it("handles malformed error object missing message property", () => {
-      expect(sanitizeRpcError({})).toBe("An unexpected RPC error occurred.");
-      expect(sanitizeRpcError({ status: 500 })).toBe(
-        "An unexpected RPC error occurred.",
-      );
-      expect(sanitizeRpcError(null)).toBe("An unexpected RPC error occurred.");
-      expect(sanitizeRpcError(undefined)).toBe(
-        "An unexpected RPC error occurred.",
-      );
+      expect(sanitizeRpcError({})).toEqual({
+        message: "An unexpected RPC error occurred.",
+      });
+      expect(sanitizeRpcError({ status: 500 })).toEqual({
+        message: "An unexpected RPC error occurred.",
+      });
+      expect(sanitizeRpcError(null)).toEqual({
+        message: "An unexpected RPC error occurred.",
+      });
+      expect(sanitizeRpcError(undefined)).toEqual({
+        message: "An unexpected RPC error occurred.",
+      });
     });
   });
 });

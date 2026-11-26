@@ -106,16 +106,10 @@ describe("formatDiffAsMarkdown", () => {
   const otherContract = contractDataKey(2).toXDR("base64");
   const account = sacFootprint(StellarSdk.Asset.native())
     .build()
-    .resources()
-    .footprint()
-    .readWrite()[1]
-    .toXDR("base64");
+    .resources.footprint.readWrite[1].toXDR("base64");
   const trustline = sacFootprint(new StellarSdk.Asset("USDC", TEST_ACCOUNT))
     .build()
-    .resources()
-    .footprint()
-    .readWrite()[1]
-    .toXDR("base64");
+    .resources.footprint.readWrite[1].toXDR("base64");
 
   it("renders additions and removals with contract and account identifiers", () => {
     const diff = footprintDiff(

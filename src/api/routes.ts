@@ -1,12 +1,5 @@
 import { Router } from "express";
 
-import { staticCacheMiddleware } from "../middleware/httpCache";
-import {
-  simulateRateLimiter,
-  decodeRateLimiter,
-  feeRateLimiter,
-} from "../middleware/rateLimiter";
-import { requireScope } from "../middleware/apiKeyAuth";
 import {
   health,
   liveness,
@@ -33,7 +26,15 @@ import {
   rpcStatus,
   contractTtl,
   decodeBatch,
+  simulateDependentBatchController,
 } from "./controllers";
+import { requireScope } from "../middleware/apiKeyAuth";
+import { staticCacheMiddleware } from "../middleware/httpCache";
+import {
+  simulateRateLimiter,
+  decodeRateLimiter,
+  feeRateLimiter,
+} from "../middleware/rateLimiter";
 
 const router = Router();
 

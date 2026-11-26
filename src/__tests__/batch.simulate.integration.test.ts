@@ -32,7 +32,7 @@ const mockSimulate = simulateTransaction as jest.MockedFunction<
   typeof simulateTransaction
 >;
 
-const VALID_XDR = "AAAAAgAAAAC" + "A".repeat(40) + "==";
+const VALID_XDR = "AAAAAgAAAAC" + "A".repeat(39) + "==";
 
 const makeResult = (cacheHit = false) => ({
   success: true,

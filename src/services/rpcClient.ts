@@ -94,11 +94,14 @@ function debugLog(message: string): void {
 /**
  * Parse a comma-separated list of RPC URLs into a trimmed, de-duplicated array.
  */
-export function parseRpcUrls(raw: string | undefined | null): string[] {
+export function parseRpcUrls(
+  raw: string | string[] | undefined | null,
+): string[] {
   if (!raw) return [];
+  const parts = Array.isArray(raw) ? raw : raw.split(",");
   const seen = new Set<string>();
   const urls: string[] = [];
-  for (const part of raw.split(",")) {
+  for (const part of parts) {
     const url = part.trim();
     if (url && !seen.has(url)) {
       seen.add(url);
@@ -464,7 +467,7 @@ export async function simulateViaRpc(
       return server.simulateTransaction(tx, simOptions as never);
     }
 
-    const server = new StellarSdk.rpc.Server(selectedUrl);
+    const server = getRpcServer(selectedUrl as Network);
     const startedAt = Date.now();
 
     try {
@@ -749,11 +752,9 @@ export async function fetchContractTtl(
 
   try {
     // Create contract instance ledger key
-    const contractInstanceKey = StellarSdk.xdr.LedgerKey.contractInstance(
-      new StellarSdk.xdr.ContractInstanceLedgerKey({
-        contract: StellarSdk.Address.fromString(contractId).toScAddress(),
-      }),
-    );
+    const contractInstanceKey = new StellarSdk.Contract(
+      contractId,
+    ).getFootprint();
 
     const startedAt = Date.now();
     const response = await server.getLedgerEntries(contractInstanceKey);

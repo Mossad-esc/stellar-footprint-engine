@@ -51,7 +51,7 @@ describe("footprint endpoints", () => {
     const temporary = contractDataKey(
       1,
       StellarSdk.xdr.ScVal.scvString("session"),
-      StellarSdk.xdr.ContractDataDurability.temporary(),
+      StellarSdk.xdr.ContractDataDurability.temporary,
     );
     const data = new StellarSdk.SorobanDataBuilder()
       .setReadOnly([code, instance])
@@ -72,12 +72,12 @@ describe("footprint endpoints", () => {
       response.body.footprint.readOnly.map(
         (entry: { xdr: string }) => entry.xdr,
       ),
-    ).toEqual([instance, code].map((key) => key.toXDR("base64")));
+    ).toEqual([code, instance].map((key) => key.toXDR("base64")));
     expect(
       response.body.footprint.readWrite.map(
         (entry: { xdr: string }) => entry.xdr,
       ),
-    ).toEqual([temporary, persistent].map((key) => key.toXDR("base64")));
+    ).toEqual([persistent, temporary].map((key) => key.toXDR("base64")));
     expect(response.body.footprint.breakdown).toEqual(
       response.body.footprintStats.breakdown,
     );

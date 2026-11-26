@@ -29,8 +29,27 @@ export const EnvSchema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   CACHE_MAX_SIZE: z.coerce.number().int().positive().default(500),
-  CACHE_HEAP_SAFETY_THRESHOLD: z.coerce.number().min(0.5).max(0.95).default(0.85),
+  CACHE_HEAP_SAFETY_THRESHOLD: z.coerce
+    .number()
+    .min(0.5)
+    .max(0.95)
+    .default(0.85),
   CACHE_EMERGENCY_TRIM_RATIO: z.coerce.number().min(0.1).max(0.5).default(0.25),
+  CACHE_COMPRESSION_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(1024),
+  CACHE_COMPRESSION_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  ENABLE_CACHE_WARMING: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  CACHE_WARMING_CONTRACTS: z.string().default(""),
+  CACHE_WARMING_INTERVAL_MS: z.coerce.number().int().positive().default(300000),
   ALLOW_CACHE_FALLBACK: z
     .enum(["true", "false"])
     .optional()
@@ -54,6 +73,12 @@ export const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  CORS_ALLOW_AUTHORIZATION_HEADER: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  API_KEYS_CONFIG: z.string().default(""),
+  API_KEYS: z.string().default(""),
 });
 
 export type EnvConfig = z.infer<typeof EnvSchema>;
@@ -175,9 +200,7 @@ export const env: EnvConfig = validateEnv(process.env);
  * is unavailable. Defaults to `true` in development/test and `false` in
  * production unless `ALLOW_CACHE_FALLBACK` is explicitly set.
  */
-export function resolveAllowCacheFallback(
-  config: EnvConfig = env,
-): boolean {
+export function resolveAllowCacheFallback(config: EnvConfig = env): boolean {
   if (config.ALLOW_CACHE_FALLBACK !== undefined) {
     return config.ALLOW_CACHE_FALLBACK;
   }
@@ -224,9 +247,7 @@ export function parseApiKeysConfig(
         );
       }
     } catch (err) {
-      logger.warn(
-        `Failed to parse API_KEYS_CONFIG: ${(err as Error).message}`,
-      );
+      logger.warn(`Failed to parse API_KEYS_CONFIG: ${(err as Error).message}`);
     }
   }
 

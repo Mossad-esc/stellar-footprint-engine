@@ -27,7 +27,9 @@ export const DEFAULT_TEST_CONTRACT_ID = StellarSdk.Address.contract(
   Buffer.alloc(32, 7),
 ).toString();
 
-function buildSignatureScVal(keypair: StellarSdk.Keypair): StellarSdk.xdr.ScVal {
+function buildSignatureScVal(
+  keypair: StellarSdk.Keypair,
+): StellarSdk.xdr.ScVal {
   return StellarSdk.xdr.ScVal.scvVec([
     StellarSdk.xdr.ScVal.scvMap([
       new StellarSdk.xdr.ScMapEntry({

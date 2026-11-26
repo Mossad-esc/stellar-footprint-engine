@@ -329,7 +329,7 @@ describe("endpoint response shape snapshots", () => {
       },
       `
       {
-        "code": "INVALID_XDR",
+        "code": "MISSING_XDR",
         "error": "Missing required field: xdr",
         "requestId": Any<String>,
         "success": false,
@@ -410,7 +410,10 @@ describe("endpoint response shape snapshots", () => {
     const response = await request(app)
       .post("/api/v1/simulate/batch")
       .send({
-        transactions: [{ xdr: SOROBAN_INVOKE_XDR }, { xdr: SOROBAN_INVOKE_XDR }],
+        transactions: [
+          { xdr: SOROBAN_INVOKE_XDR },
+          { xdr: SOROBAN_INVOKE_XDR },
+        ],
         network: "testnet",
       });
 

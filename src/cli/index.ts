@@ -25,10 +25,11 @@
  *   SFE_NETWORK    Default network when --network is omitted (default: testnet)
  */
 
-import { Command } from "commander";
-import * as https from "https";
 import * as http from "http";
+import * as https from "https";
 import * as url from "url";
+
+import { Command } from "commander";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Colour helpers (no external dep — ANSI escapes directly)
@@ -60,25 +61,24 @@ interface RequestOptions {
 }
 
 function request<T>(opts: RequestOptions): Promise<T> {
-  const baseUrl = opts.baseUrl ?? process.env["SFE_BASE_URL"] ?? "http://localhost:3000";
+  const baseUrl =
+    opts.baseUrl ?? process.env["SFE_BASE_URL"] ?? "http://localhost:3000";
   const apiKey = opts.apiKey ?? process.env["SFE_API_KEY"];
 
   const parsed = url.parse(baseUrl);
   const isHttps = parsed.protocol === "https:";
   const transport = isHttps ? https : http;
-  const port = parsed.port
-    ? parseInt(parsed.port, 10)
-    : isHttps
-      ? 443
-      : 3000;
+  const port = parsed.port ? parseInt(parsed.port, 10) : isHttps ? 443 : 3000;
 
-  const bodyStr = opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
+  const bodyStr =
+    opts.body !== undefined ? JSON.stringify(opts.body) : undefined;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json",
   };
-  if (bodyStr) headers["Content-Length"] = Buffer.byteLength(bodyStr).toString();
+  if (bodyStr)
+    headers["Content-Length"] = Buffer.byteLength(bodyStr).toString();
   if (apiKey) headers["x-api-key"] = apiKey;
 
   return new Promise((resolve, reject) => {
@@ -99,7 +99,11 @@ function request<T>(opts: RequestOptions): Promise<T> {
             const parsed = JSON.parse(raw) as T;
             resolve(parsed);
           } catch {
-            reject(new Error(`Non-JSON response (${res.statusCode}): ${raw.slice(0, 200)}`));
+            reject(
+              new Error(
+                `Non-JSON response (${res.statusCode}): ${raw.slice(0, 200)}`,
+              ),
+            );
           }
         });
       },
@@ -276,7 +280,10 @@ async function handleSimulate(
         ["CPU instructions", Number(data.cost.cpuInsns).toLocaleString()],
         ["Memory bytes", Number(data.cost.memBytes).toLocaleString()],
         ...(data.resourceFee
-          ? ([["Resource fee", `${data.resourceFee} stroops`]] as [string, string][])
+          ? ([["Resource fee", `${data.resourceFee} stroops`]] as [
+              string,
+              string,
+            ][])
           : []),
       ],
       "Resource Cost",
@@ -342,7 +349,9 @@ async function handleDiff(
 
   const d = result.data;
 
-  console.log(`\n${c.bold("Footprint Diff")} · network=${c.cyan(opts.network)}`);
+  console.log(
+    `\n${c.bold("Footprint Diff")} · network=${c.cyan(opts.network)}`,
+  );
 
   const addedCount =
     (d.added.readOnly?.length ?? 0) + (d.added.readWrite?.length ?? 0);
@@ -358,7 +367,8 @@ async function handleDiff(
     [
       "Unchanged entries",
       String(
-        (d.unchanged.readOnly?.length ?? 0) + (d.unchanged.readWrite?.length ?? 0),
+        (d.unchanged.readOnly?.length ?? 0) +
+          (d.unchanged.readWrite?.length ?? 0),
       ),
     ],
   ]);
@@ -369,11 +379,17 @@ async function handleDiff(
   }
   if (removedCount) {
     footprintSection(c.red("- Removed (read-only)"), d.removed.readOnly ?? []);
-    footprintSection(c.red("- Removed (read-write)"), d.removed.readWrite ?? []);
+    footprintSection(
+      c.red("- Removed (read-write)"),
+      d.removed.readWrite ?? [],
+    );
   }
   if (movedCount) {
     footprintSection(c.yellow("~ Moved → read-only"), d.moved.toReadOnly ?? []);
-    footprintSection(c.yellow("~ Moved → read-write"), d.moved.toReadWrite ?? []);
+    footprintSection(
+      c.yellow("~ Moved → read-write"),
+      d.moved.toReadWrite ?? [],
+    );
   }
 
   console.log();
@@ -534,31 +550,53 @@ const program = new Command();
 
 program
   .name("sfe")
-  .description("Stellar Footprint Engine CLI — simulate, diff, decode, and cost Soroban transactions")
+  .description(
+    "Stellar Footprint Engine CLI — simulate, diff, decode, and cost Soroban transactions",
+  )
   .version("1.0.0")
-  .option("--base-url <url>", "Override the service base URL (env: SFE_BASE_URL)")
+  .option(
+    "--base-url <url>",
+    "Override the service base URL (env: SFE_BASE_URL)",
+  )
   .option("--api-key <key>", "Override the API key (env: SFE_API_KEY)");
 
 // sfe simulate <xdr>
 program
   .command("simulate <xdr>")
-  .description("Simulate a Soroban transaction XDR and display footprint + cost")
-  .option("-n, --network <net>", "Stellar network", process.env["SFE_NETWORK"] ?? "testnet")
+  .description(
+    "Simulate a Soroban transaction XDR and display footprint + cost",
+  )
+  .option(
+    "-n, --network <net>",
+    "Stellar network",
+    process.env["SFE_NETWORK"] ?? "testnet",
+  )
   .option("--json", "Output raw JSON instead of formatted table", false)
-  .action(async (xdr: string, opts: { network: string; json: boolean }, cmd) => {
-    const parent = cmd.parent as Command;
-    const globalOpts = parent.opts<{ baseUrl?: string; apiKey?: string }>();
-    await handleSimulate(xdr, { ...opts, ...globalOpts });
-  });
+  .action(
+    async (xdr: string, opts: { network: string; json: boolean }, cmd) => {
+      const parent = cmd.parent as Command;
+      const globalOpts = parent.opts<{ baseUrl?: string; apiKey?: string }>();
+      await handleSimulate(xdr, { ...opts, ...globalOpts });
+    },
+  );
 
 // sfe diff <xdr1> <xdr2>
 program
   .command("diff <xdr1> <xdr2>")
   .description("Compare footprints of two transaction XDRs")
-  .option("-n, --network <net>", "Stellar network", process.env["SFE_NETWORK"] ?? "testnet")
+  .option(
+    "-n, --network <net>",
+    "Stellar network",
+    process.env["SFE_NETWORK"] ?? "testnet",
+  )
   .option("--json", "Output raw JSON instead of formatted table", false)
   .action(
-    async (xdr1: string, xdr2: string, opts: { network: string; json: boolean }, cmd) => {
+    async (
+      xdr1: string,
+      xdr2: string,
+      opts: { network: string; json: boolean },
+      cmd,
+    ) => {
       const parent = cmd.parent as Command;
       const globalOpts = parent.opts<{ baseUrl?: string; apiKey?: string }>();
       await handleDiff(xdr1, xdr2, { ...opts, ...globalOpts });
@@ -569,7 +607,11 @@ program
 program
   .command("decode <xdr>")
   .description("Decode an XDR string into human-readable JSON (no RPC call)")
-  .option("-t, --type <type>", "XDR type hint (e.g. TransactionEnvelope, LedgerKey)", "TransactionEnvelope")
+  .option(
+    "-t, --type <type>",
+    "XDR type hint (e.g. TransactionEnvelope, LedgerKey)",
+    "TransactionEnvelope",
+  )
   .option("--json", "Output raw JSON (default for this command)", false)
   .action(async (xdr: string, opts: { type: string; json: boolean }, cmd) => {
     const parent = cmd.parent as Command;
@@ -581,13 +623,19 @@ program
 program
   .command("cost <xdr>")
   .description("Simulate a transaction and display detailed fee/cost breakdown")
-  .option("-n, --network <net>", "Stellar network", process.env["SFE_NETWORK"] ?? "testnet")
+  .option(
+    "-n, --network <net>",
+    "Stellar network",
+    process.env["SFE_NETWORK"] ?? "testnet",
+  )
   .option("--json", "Output raw JSON instead of formatted table", false)
-  .action(async (xdr: string, opts: { network: string; json: boolean }, cmd) => {
-    const parent = cmd.parent as Command;
-    const globalOpts = parent.opts<{ baseUrl?: string; apiKey?: string }>();
-    await handleCost(xdr, { ...opts, ...globalOpts });
-  });
+  .action(
+    async (xdr: string, opts: { network: string; json: boolean }, cmd) => {
+      const parent = cmd.parent as Command;
+      const globalOpts = parent.opts<{ baseUrl?: string; apiKey?: string }>();
+      await handleCost(xdr, { ...opts, ...globalOpts });
+    },
+  );
 
 program.parseAsync(process.argv).catch((err: Error) => {
   die(err.message);

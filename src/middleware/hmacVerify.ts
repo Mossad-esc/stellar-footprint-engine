@@ -30,6 +30,40 @@ export const MAX_TIMESTAMP_DRIFT_SECONDS = 300;
 export const NONCE_TTL_SECONDS = 600;
 export const NONCE_KEY_PREFIX = "nonce:";
 
+/**
+ * Verify a `t=<unix_seconds>,v1=<hex_hmac>` webhook signature header.
+ */
+export function verifySignature(
+  payload: string,
+  header: string,
+  secret: string,
+  toleranceSeconds: number = MAX_TIMESTAMP_DRIFT_SECONDS,
+): boolean {
+  if (!header || !secret) return false;
+  const parts = header.split(",");
+  let timestampStr: string | undefined;
+  let sigHex: string | undefined;
+  for (const part of parts) {
+    const [k, v] = part.split("=");
+    if (k === "t") timestampStr = v;
+    else if (k === "v1") sigHex = v;
+  }
+  if (!timestampStr || !sigHex) return false;
+  const timestamp = Number(timestampStr);
+  if (!Number.isFinite(timestamp)) return false;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSeconds - timestamp) > toleranceSeconds) return false;
+
+  const expectedHex = crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.${payload}`)
+    .digest("hex");
+  const sigBuf = Buffer.from(sigHex, "utf8");
+  const expBuf = Buffer.from(expectedHex, "utf8");
+  if (sigBuf.length !== expBuf.length) return false;
+  return crypto.timingSafeEqual(sigBuf, expBuf);
+}
+
 export async function hmacVerify(
   req: Request,
   res: Response,
@@ -55,12 +89,12 @@ export async function hmacVerify(
   const nonce = req.headers[REQUEST_NONCE_HEADER] as string | undefined;
 
   if (!timestampHeader) {
-    res.status(401).json({ error: "Missing request timestamp" });
+    res.status(401).json({ error: "Missing x-request-timestamp header" });
     return;
   }
 
   if (!nonce) {
-    res.status(401).json({ error: "Missing request nonce" });
+    res.status(401).json({ error: "Missing x-request-nonce header" });
     return;
   }
 

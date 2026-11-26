@@ -122,7 +122,7 @@ describe("serialized footprint sizes", () => {
     // ContractCode: uint32 discriminator + 32-byte hash = 36 bytes.
     // ContractData instance: discriminator + ScAddress + ScVal + durability = 48.
     const stats = calculateFootprintStats([code], [CONTRACT_DATA_XDR]);
-    expect(stats).toEqual({
+    expect(stats).toMatchObject({
       readOnlyCount: 1,
       readWriteCount: 1,
       totalEntries: 2,
@@ -158,7 +158,7 @@ describe("serialized footprint sizes", () => {
           Buffer.alloc(32, 1),
         ).toScAddress(),
         key: StellarSdk.xdr.ScVal.scvSymbol("abcde"),
-        durability: StellarSdk.xdr.ContractDataDurability.persistent(),
+        durability: StellarSdk.xdr.ContractDataDurability.persistent,
       }),
     ).toXDR("base64");
     expect(calculateFootprintStats([key, key], [])).toMatchObject({

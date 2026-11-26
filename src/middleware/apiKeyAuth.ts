@@ -10,7 +10,6 @@ export interface ScopedApiKey {
 }
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       apiKeyScopes?: string[];

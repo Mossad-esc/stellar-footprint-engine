@@ -1,5 +1,9 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
+import type { Network } from "../types";
+
+export type { Network };
+
 export function parseRpcHeaders(raw?: string): Record<string, string> {
   if (!raw) return {};
   const trimmed = raw.trim();
@@ -67,7 +71,9 @@ export function parseRpcUrls(raw?: string): string[] {
 }
 
 function resolveRpcUrls(network: Network): string[] {
-  const perNetwork = parseRpcUrls(process.env[`${network.toUpperCase()}_RPC_URL`]);
+  const perNetwork = parseRpcUrls(
+    process.env[`${network.toUpperCase()}_RPC_URL`],
+  );
   if (perNetwork.length > 0) return perNetwork;
   return parseRpcUrls(process.env.STELLAR_RPC_URL);
 }
@@ -126,7 +132,9 @@ function buildServer(url: string): StellarSdk.rpc.Server {
  * Return the pool of RPC servers for a network, one per configured endpoint.
  * The pool is cached for RPC_POOL_TTL_MS and rebuilt when the URL set changes.
  */
-export function getRpcServers(network: Network = "testnet"): StellarSdk.rpc.Server[] {
+export function getRpcServers(
+  network: Network = "testnet",
+): StellarSdk.rpc.Server[] {
   const rpcPoolTtlMs = parseInt(process.env.RPC_POOL_TTL_MS || "300000", 10);
   const now = Date.now();
   const { rpcUrls } = getNetworkConfig(network);
@@ -151,7 +159,10 @@ export function getRpcServers(network: Network = "testnet"): StellarSdk.rpc.Serv
 }
 
 export function getRpcServer(
-  network: Network = "testnet",
+  network: Network | string = "testnet",
 ): StellarSdk.rpc.Server {
-  return getRpcServers(network)[0];
+  if (typeof network === "string" && /^https?:\/\//i.test(network)) {
+    return buildServer(network);
+  }
+  return getRpcServers(network as Network)[0];
 }

@@ -7,9 +7,9 @@ import { optimizeFootprint } from "../optimizer";
 
 // ── Arbitraries ──────────────────────────────────────────────────────────────
 
-const arbBytes32 = fc.uint8Array({ minLength: 32, maxLength: 32 }).map((arr) =>
-  Buffer.from(arr),
-);
+const arbBytes32 = fc
+  .uint8Array({ minLength: 32, maxLength: 32 })
+  .map((arr) => Buffer.from(arr));
 
 const arbPublicKey = arbBytes32.map((buf) =>
   StellarSdk.StrKey.encodeEd25519PublicKey(buf),
@@ -47,10 +47,18 @@ const arbScValPrimitive: fc.Arbitrary<StellarSdk.xdr.ScVal> = fc.oneof(
     .map((n) => StellarSdk.xdr.ScVal.scvI32(n)),
   fc
     .bigInt({ min: 0n, max: 0xffffffffffffffffn })
-    .map((n) => StellarSdk.xdr.ScVal.scvU64(StellarSdk.xdr.Uint64.fromString(n.toString()))),
+    .map((n) =>
+      StellarSdk.xdr.ScVal.scvU64(
+        StellarSdk.xdr.Uint64.fromString(n.toString()),
+      ),
+    ),
   fc
     .bigInt({ min: -0x8000000000000000n, max: 0x7fffffffffffffffn })
-    .map((n) => StellarSdk.xdr.ScVal.scvI64(StellarSdk.xdr.Int64.fromString(n.toString()))),
+    .map((n) =>
+      StellarSdk.xdr.ScVal.scvI64(
+        StellarSdk.xdr.Int64.fromString(n.toString()),
+      ),
+    ),
   fc
     .stringMatching(/^[a-zA-Z0-9_]{1,16}$/)
     .map((s) => StellarSdk.xdr.ScVal.scvSymbol(s)),
@@ -81,8 +89,8 @@ const arbScVal: fc.Arbitrary<StellarSdk.xdr.ScVal> = fc.oneof(
 
 const arbDurability: fc.Arbitrary<StellarSdk.xdr.ContractDataDurability> =
   fc.constantFrom(
-    StellarSdk.xdr.ContractDataDurability.temporary(),
-    StellarSdk.xdr.ContractDataDurability.persistent(),
+    StellarSdk.xdr.ContractDataDurability.temporary,
+    StellarSdk.xdr.ContractDataDurability.persistent,
   );
 
 const arbLedgerKey: fc.Arbitrary<StellarSdk.xdr.LedgerKey> = fc.oneof(
@@ -128,9 +136,7 @@ const arbLedgerKey: fc.Arbitrary<StellarSdk.xdr.LedgerKey> = fc.oneof(
     ),
   ),
   arbBytes32.map((keyHash) =>
-    StellarSdk.xdr.LedgerKey.ttl(
-      new StellarSdk.xdr.LedgerKeyTtl({ keyHash }),
-    ),
+    StellarSdk.xdr.LedgerKey.ttl(new StellarSdk.xdr.LedgerKeyTtl({ keyHash })),
   ),
 );
 
@@ -188,7 +194,7 @@ describe("XDR serialization and optimizer property-based tests", () => {
         const decodedKey = StellarSdk.xdr.LedgerKey.fromXDR(encoded, "base64");
 
         expect(decodedKey.toXDR("base64")).toBe(encoded);
-        expect(decodedKey.switch().name).toBe(key.switch().name);
+        expect(decodedKey.type).toBe(key.type);
 
         const decodedResult = decodeXdr(encoded, "ledger_key");
         expect(decodedResult.success).toBe(true);
@@ -206,7 +212,7 @@ describe("XDR serialization and optimizer property-based tests", () => {
         const decodedVal = StellarSdk.xdr.ScVal.fromXDR(encoded, "base64");
 
         expect(decodedVal.toXDR("base64")).toBe(encoded);
-        expect(decodedVal.switch().name).toBe(val.switch().name);
+        expect(decodedVal.type).toBe(val.type);
       }),
       { numRuns: 100 },
     );

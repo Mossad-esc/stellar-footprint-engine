@@ -1193,46 +1193,6 @@ components:
         network:
           $ref: "#/components/schemas/Network"
 
-    FootprintEntry:
-      type: object
-      required: [xdr, type]
-      properties:
-        xdr:
-          type: string
-        type:
-          type: string
-          enum:
-            [
-              ContractData,
-              ContractCode,
-              Account,
-              TrustLine,
-              Offer,
-              Data,
-              ClaimableBalance,
-              LiquidityPool,
-              ConfigSetting,
-              Ttl,
-              Unknown,
-            ]
-        contractId:
-          type: string
-        ttlInfo:
-          $ref: "#/components/schemas/TtlInfo"
-
-    ParsedFootprint:
-      type: object
-      required: [readOnly, readWrite]
-      properties:
-        readOnly:
-          type: array
-          items:
-            $ref: "#/components/schemas/FootprintEntry"
-        readWrite:
-          type: array
-          items:
-            $ref: "#/components/schemas/FootprintEntry"
-
     Footprint:
       type: object
       required: [readOnly, readWrite]
@@ -1399,7 +1359,20 @@ components:
           type: string
         type:
           type: string
-          enum: [ContractData, ContractCode, Account, TrustLine, Unknown]
+          enum:
+            [
+              ContractData,
+              ContractCode,
+              Account,
+              TrustLine,
+              Offer,
+              Data,
+              ClaimableBalance,
+              LiquidityPool,
+              ConfigSetting,
+              Ttl,
+              Unknown,
+            ]
         contractId:
           type: string
           description: Contract address bytes or code hash in hexadecimal
@@ -1412,6 +1385,8 @@ components:
           type: boolean
         assetInfo:
           $ref: "#/components/schemas/AssetInfo"
+        ttlInfo:
+          $ref: "#/components/schemas/TtlInfo"
 
     StorageStats:
       allOf:

@@ -531,17 +531,14 @@ describe("maintenance operation fees", () => {
       expect(BigInt(parts?.refundableFee ?? "0")).toBeGreaterThan(0n);
       const tx = mockSimulate.mock.calls[0][0] as StellarSdk.Transaction;
       expect(tx.operations[0].type).toBe("restoreFootprint");
+      const env = tx.toEnvelope();
+      if (env.type !== "envelopeTypeTx" || !("sorobanData" in env.v1.tx.ext)) {
+        throw new Error("Expected v1 envelope with sorobanData");
+      }
       expect(
-        tx
-          .toEnvelope()
-          .v1()
-          .tx()
-          .ext()
-          .sorobanData()
-          .resources()
-          .footprint()
-          .readWrite()
-          .map((k) => k.toXDR("base64")),
+        env.v1.tx.ext.sorobanData.resources.footprint.readWrite.map((k) =>
+          k.toXDR("base64"),
+        ),
       ).toEqual([instance, code]);
     },
   );
@@ -896,7 +893,9 @@ describe("edge cases and Stellar Core fee formula verification", () => {
         expect(detailed.breakdown.cpuFee).toBe(expectedCpuFee.toString());
         expect(detailed.breakdown.memoryFee).toBe(expectedMemFee.toString());
         expect(detailed.breakdown.readFee).toBe(expectedReadFee.toString());
-        expect(detailed.breakdown.overheadFee).toBe(expectedOverhead.toString());
+        expect(detailed.breakdown.overheadFee).toBe(
+          expectedOverhead.toString(),
+        );
         expect(detailed.resourceFee).toBe(expectedResource.toString());
         expect(detailed.totalStroops).toBe((p50 + expectedResource).toString());
       },

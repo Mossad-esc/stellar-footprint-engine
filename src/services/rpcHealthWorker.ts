@@ -1,5 +1,5 @@
-import { getRpcServer, Network } from "../config/stellar";
 import { setCircuitStatus } from "./rpcClient";
+import { getRpcServer, Network } from "../config/stellar";
 import { logger } from "../utils/logger";
 
 export interface RpcHealthSample {
@@ -56,7 +56,9 @@ export async function pingEndpoint(network: Network): Promise<RpcHealthSample> {
   return sample;
 }
 
-export function startRpcHealthWorker(networks: Network[] = ["testnet", "mainnet", "futurenet"]): void {
+export function startRpcHealthWorker(
+  networks: Network[] = ["testnet", "mainnet", "futurenet"],
+): void {
   if (timer) return;
   const tick = async () => {
     for (const n of networks) {

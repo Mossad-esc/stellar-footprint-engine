@@ -1,11 +1,13 @@
 import path from "path";
 
-import { Network } from "@config/stellar";
+import { Network, getNetworkConfig } from "@config/stellar";
 import metrics from "@middleware/metrics";
 import {
+  ALLOW_CACHE_FALLBACK,
   getCache,
   getCacheStatus,
   invalidateContractCache,
+  isCacheFallbackEnabled,
 } from "@services/cache";
 import { decodeXdr, type XdrType } from "@services/decoder";
 import {
@@ -13,11 +15,15 @@ import {
   estimateFeeDetailed,
   type FeeEstimateOptions,
 } from "@services/feeEstimator";
-import { footprintDiff, type FootprintInput } from "@services/footprintDiff";
+import {
+  footprintDiff,
+  formatDiffAsMarkdown,
+  type FootprintInput,
+} from "@services/footprintDiff";
 import { calculateFootprintStats } from "@services/footprintExtractor";
-import { getNetworkStatus, getNetworkLimits } from "@services/networkStatus";
+import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
-import { fetchContractTtl } from "@services/rpcClient";
+import { fetchContractTtl, getRpcStats } from "@services/rpcClient";
 import {
   simulateTransaction,
   simulateDryRun as analyzeDryRun,
@@ -33,6 +39,7 @@ import {
   InvalidWebhookUrlError,
   retryDeadLetter,
 } from "@services/webhook";
+import * as StellarSdk from "@stellar/stellar-sdk";
 import { AppError } from "@utils/AppError";
 import { rpcCircuitBreaker } from "@utils/circuitBreaker";
 import { validateXdrInput } from "@utils/validateXdrInput";
@@ -55,6 +62,8 @@ import {
   DecodeQuerySchema,
   SimulateHistoryQuerySchema,
   NetworkStatusQuerySchema,
+  SimulateBatchStreamQuerySchema,
+  FootprintDiffQuerySchema,
   DecodeBatchBodySchema,
   ContractTtlParamsSchema,
   ContractTtlQuerySchema,
@@ -97,11 +106,19 @@ export async function readiness(
     const checks: Record<string, { status: string; details?: unknown }> = {};
 
     // Check Redis/Cache
-    let cacheFallbackEnabled = false;
+    let cacheFallbackEnabled = isCacheFallbackEnabled
+      ? isCacheFallbackEnabled()
+      : ALLOW_CACHE_FALLBACK;
     try {
       const cache = getCache();
-      const status = getCacheStatus();
-      cacheFallbackEnabled = status.fallbackEnabled;
+      const status = getCacheStatus?.() ?? {
+        backend: cache.backend,
+        redis: "disabled" as const,
+        fallbackEnabled: cacheFallbackEnabled,
+      };
+      cacheFallbackEnabled = isCacheFallbackEnabled
+        ? isCacheFallbackEnabled()
+        : status.fallbackEnabled;
 
       const testKey = "__health_check__";
       const testValue = Date.now().toString();
@@ -119,7 +136,7 @@ export async function readiness(
             : "unhealthy",
         details: {
           backend: cache.backend,
-          redisStatus: status.redisStatus,
+          redisStatus: status.redis,
           fallbackEnabled: status.fallbackEnabled,
         },
       };
@@ -153,7 +170,7 @@ export async function readiness(
 
     if (allHealthy) {
       res.status(HTTP_STATUS.OK).json({
-        status: anyDegraded ? "ready (degraded)" : "ready",
+        status: "ready",
         checks,
         timestamp: new Date().toISOString(),
       });
@@ -181,6 +198,21 @@ export async function simulate(
     ledgerSequence?: number;
     dryRun?: boolean;
   };
+
+  // Validate dryRun query parameter if provided
+  if (
+    req.query.dryRun !== undefined &&
+    req.query.dryRun !== "true" &&
+    req.query.dryRun !== "false"
+  ) {
+    return next(
+      new AppError(
+        "Invalid dryRun parameter: must be 'true' or 'false'",
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+      ),
+    );
+  }
 
   // Check for dryRun flag in query params or body
   const isDryRun = req.query.dryRun === "true" || dryRun === true;
@@ -266,7 +298,13 @@ export async function simulate(
       // ignore — never block the request for a metrics failure
     }
 
-    void simulateTransaction(xdrValue, net, undefined, ledgerSequence, maxLedgerAge)
+    void simulateTransaction(
+      xdrValue,
+      net,
+      undefined,
+      ledgerSequence,
+      ...(maxLedgerAge !== undefined ? ([maxLedgerAge] as const) : []),
+    )
       .then((result) => {
         const duration = (Date.now() - start) / 1000;
         metrics.recordSimulation(net, result.success);
@@ -305,7 +343,7 @@ export async function simulate(
       net,
       res.locals.abortSignal,
       ledgerSequence,
-      maxLedgerAge,
+      ...(maxLedgerAge !== undefined ? ([maxLedgerAge] as const) : []),
     );
     const duration = (Date.now() - start) / 1000;
     metrics.recordSimulation(net, result.success);
@@ -697,6 +735,31 @@ export async function invalidateContractCacheController(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const adminKey = process.env.ADMIN_API_KEY;
+    if (adminKey) {
+      const provided =
+        (req.headers["x-admin-key"] as string | undefined) ??
+        req.headers.authorization?.replace(/^Bearer\s+/i, "");
+      if (!provided) {
+        return next(
+          new AppError(
+            "Admin credentials required",
+            HTTP_STATUS.UNAUTHORIZED,
+            ErrorCode.UNAUTHORIZED,
+          ),
+        );
+      }
+      if (provided !== adminKey) {
+        return next(
+          new AppError(
+            "Invalid admin credentials",
+            HTTP_STATUS.FORBIDDEN,
+            ErrorCode.FORBIDDEN,
+          ),
+        );
+      }
+    }
+
     const { contractId } = req.params as { contractId?: string };
     if (!contractId || contractId.trim() === "") {
       return next(
@@ -712,6 +775,7 @@ export async function invalidateContractCacheController(
         new AppError(
           "Invalid contract ID: must be a valid Stellar contract StrKey",
           HTTP_STATUS.BAD_REQUEST,
+          ErrorCode.INVALID_CONTRACT_ID,
         ),
       );
     }
@@ -875,7 +939,7 @@ export async function estimateFeeController(
       try {
         const parsed = StellarSdk.TransactionBuilder.fromXDR(
           xdr,
-          NETWORK_PASSPHRASES[net],
+          getNetworkConfig(net).networkPassphrase,
         );
         const inner =
           parsed instanceof StellarSdk.FeeBumpTransaction
@@ -1116,7 +1180,7 @@ export function getSimulateHistory(
     const { limit, offset, status } = validation.data;
 
     const now = Date.now();
-    let raw = (historyStore.get(ip) ?? []).filter((e) => e.expiresAt > now);
+    const raw = (historyStore.get(ip) ?? []).filter((e) => e.expiresAt > now);
     let entries = raw.map((e) => e.entry).reverse();
     if (status === "success") entries = entries.filter((e) => e.success);
     if (status === "failed") entries = entries.filter((e) => !e.success);
@@ -1134,10 +1198,18 @@ export function getSimulateHistory(
   }
 }
 
-export async function rpcGateway(req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function rpcGateway(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
   const { jsonrpc, id, method, params } = req.body ?? {};
   if (jsonrpc !== "2.0" || id === undefined) {
-    res.status(400).json({ jsonrpc: "2.0", id: id ?? null, error: { code: -32600, message: "Invalid Request" } });
+    res.status(400).json({
+      jsonrpc: "2.0",
+      id: id ?? null,
+      error: { code: -32600, message: "Invalid Request" },
+    });
     return;
   }
   try {
@@ -1153,13 +1225,21 @@ export async function rpcGateway(req: Request, res: Response, next: NextFunction
     }
     if (method === "decodeXdr") {
       const [xdr, type] = params ?? [];
-      const result = decodeXdr(xdr, (type as any) || "transaction");
+      const result = decodeXdr(xdr, (type as XdrType) || "transaction");
       res.json({ jsonrpc: "2.0", id, result });
       return;
     }
-    res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+    res.status(400).json({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32601, message: "Method not found" },
+    });
   } catch (err) {
-    res.status(400).json({ jsonrpc: "2.0", id, error: { code: -32602, message: (err as Error).message } });
+    res.status(400).json({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32602, message: (err as Error).message },
+    });
   }
 }
 // ---------------------------------------------------------------------------
@@ -1368,4 +1448,128 @@ export async function retrySimulationJob(
       message: "Webhook redelivery scheduled",
     },
   });
+}
+
+export async function contractTtl(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const paramValidation = validateQuery(
+    ContractTtlParamsSchema,
+    req.params as Record<string, unknown>,
+  );
+  if (!paramValidation.success) {
+    return next(
+      new AppError(
+        paramValidation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        paramValidation.issues,
+      ),
+    );
+  }
+  const queryValidation = validateQuery(ContractTtlQuerySchema, req.query);
+  if (!queryValidation.success) {
+    return next(
+      new AppError(
+        queryValidation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        queryValidation.issues,
+      ),
+    );
+  }
+
+  try {
+    const ttl = await fetchContractTtl(
+      queryValidation.data.network as Network,
+      paramValidation.data.contractId,
+    );
+    if (!ttl) {
+      return next(
+        new AppError(
+          "Contract not found",
+          HTTP_STATUS.NOT_FOUND,
+          ErrorCode.JOB_NOT_FOUND,
+        ),
+      );
+    }
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      data: {
+        contractId: paramValidation.data.contractId,
+        network: queryValidation.data.network,
+        ...ttl,
+      },
+    });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
+}
+
+export function decodeBatch(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const validation = validateBody(DecodeBatchBodySchema, req.body);
+  if (!validation.success) {
+    return next(
+      new AppError(
+        validation.error,
+        HTTP_STATUS.BAD_REQUEST,
+        ErrorCode.INVALID_QUERY_PARAMETERS,
+        validation.issues,
+      ),
+    );
+  }
+
+  const results = validation.data.items.map((item) => {
+    const decoded = decodeXdr(item.xdr, item.type as XdrType);
+    if (!decoded.success) {
+      return {
+        ...(item.id !== undefined ? { id: item.id } : {}),
+        success: false,
+        error: decoded.error ?? "Failed to decode XDR",
+      };
+    }
+    return {
+      ...(item.id !== undefined ? { id: item.id } : {}),
+      success: true,
+      decoded: decoded.decoded ?? decoded,
+    };
+  });
+
+  res.status(HTTP_STATUS.OK).json({ success: true, results });
+}
+
+export async function simulateDependentBatchController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const { transactions, network } = (req.body ?? {}) as {
+    transactions?: DependentTx[];
+    network?: Network;
+  };
+  if (!Array.isArray(transactions) || transactions.length === 0) {
+    return next(
+      new AppError(
+        "transactions must be a non-empty array",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+  const net: Network = network ?? (DEFAULT_NETWORK as Network);
+  try {
+    const results = await simulateDependentBatch(transactions, net);
+    res.status(HTTP_STATUS.OK).json({ success: true, data: { results } });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
 }

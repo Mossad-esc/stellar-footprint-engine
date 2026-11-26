@@ -32,4 +32,9 @@ export const en = {
   CIRCUIT_OPEN: "Service temporarily unavailable. Please retry later.",
   JOB_NOT_FOUND: "Webhook job not found",
   UNAUTHORIZED: "Unauthorized",
+  XDR_DEPTH_EXCEEDED: "XDR recursion depth or node limit exceeded",
+  INVALID_CONTRACT_ID:
+    "Invalid contract ID: must be a valid Stellar contract StrKey",
+  PAYLOAD_TOO_LARGE: "Payload Too Large",
+  RPC_PAYLOAD_TOO_LARGE: "RPC response payload exceeded maximum allowed size",
 } as const;

@@ -213,12 +213,16 @@ function maintenanceTransactionSize(
       payload: Buffer.alloc(64),
     }),
   );
-  const wire = tx.toEnvelope().v1();
-  const transaction = wire.tx();
-  transaction.sourceAccount(source);
-  transaction.memo(StellarSdk.xdr.Memo.memoHash(Buffer.alloc(32)));
-  transaction.cond(
-    StellarSdk.xdr.Preconditions.precondV2(
+  const envelope = tx.toEnvelope();
+  if (envelope.type !== "envelopeTypeTx") {
+    throw new Error("Expected v1 transaction envelope");
+  }
+  const wire = envelope.v1;
+  const transaction = wire.tx;
+  Object.assign(transaction, {
+    sourceAccount: source,
+    memo: StellarSdk.xdr.Memo.memoHash(Buffer.alloc(32)),
+    cond: StellarSdk.xdr.Preconditions.precondV2(
       new StellarSdk.xdr.PreconditionsV2({
         timeBounds: new StellarSdk.xdr.TimeBounds({
           minTime: StellarSdk.xdr.Uint64.fromString("0"),
@@ -234,20 +238,23 @@ function maintenanceTransactionSize(
         extraSigners: [signer, signer],
       }),
     ),
-  );
-  transaction.operations()[0].sourceAccount(source);
+  });
+  Object.assign(transaction.operations[0], { sourceAccount: source });
   const sizingData = StellarSdk.xdr.SorobanTransactionData.fromXDR(
     data.toXDR(),
   );
-  sizingData.ext(
-    new StellarSdk.xdr.SorobanTransactionDataExt(
-      1,
-      new StellarSdk.xdr.SorobanResourcesExtV0({ archivedSorobanEntries: [] }),
+  Object.assign(sizingData, {
+    ext: StellarSdk.xdr.SorobanTransactionDataExt.resourceExt(
+      new StellarSdk.xdr.SorobanResourcesExtV0({
+        archivedSorobanEntries: [],
+      }),
     ),
-  );
-  transaction.ext(new StellarSdk.xdr.TransactionExt(1, sizingData));
-  wire.signatures(
-    Array.from(
+  });
+  Object.assign(transaction, {
+    ext: StellarSdk.xdr.TransactionExt.sorobanData(sizingData),
+  });
+  Object.assign(wire, {
+    signatures: Array.from(
       { length: 20 },
       () =>
         new StellarSdk.xdr.DecoratedSignature({
@@ -255,7 +262,7 @@ function maintenanceTransactionSize(
           signature: Buffer.alloc(64),
         }),
     ),
-  );
+  });
   const size = BigInt(wire.toXDR().length);
   return size + 500n > (size * 11n) / 10n ? size + 500n : (size * 11n) / 10n;
 }
@@ -321,21 +328,21 @@ async function estimateMaintenanceFee(
   }
   const response = await server.simulateTransaction(tx);
   if (StellarSdk.rpc.Api.isSimulationError(response))
-    throw new Error(sanitizeRpcError(response.error));
+    throw new Error(sanitizeRpcError(response.error).message);
   if (getRestorePreamble(response))
     throw new Error(
       "Transaction requires restoration before estimating this operation",
     );
   const data = response.transactionData.build();
   const totalResourceFee = BigInt(response.minResourceFee);
-  const resources = data.resources();
-  const footprint = resources.footprint();
+  const resources = data.resources;
+  const footprint = resources.footprint;
   const settingIds = [
-    StellarSdk.xdr.ConfigSettingId.configSettingContractComputeV0(),
-    StellarSdk.xdr.ConfigSettingId.configSettingContractLedgerCostV0(),
-    StellarSdk.xdr.ConfigSettingId.configSettingContractLedgerCostExtV0(),
-    StellarSdk.xdr.ConfigSettingId.configSettingContractHistoricalDataV0(),
-    StellarSdk.xdr.ConfigSettingId.configSettingContractBandwidthV0(),
+    StellarSdk.xdr.ConfigSettingId.configSettingContractComputeV0,
+    StellarSdk.xdr.ConfigSettingId.configSettingContractLedgerCostV0,
+    StellarSdk.xdr.ConfigSettingId.configSettingContractLedgerCostExtV0,
+    StellarSdk.xdr.ConfigSettingId.configSettingContractHistoricalDataV0,
+    StellarSdk.xdr.ConfigSettingId.configSettingContractBandwidthV0,
   ];
   const configuration = await server.getLedgerEntries(
     ...settingIds.map((configSettingId) =>
@@ -344,71 +351,84 @@ async function estimateMaintenanceFee(
       ),
     ),
   );
-  const settings = new Map(
-    configuration.entries.map((entry) => {
-      const setting = entry.val.configSetting();
-      return [setting.switch().name, setting] as const;
-    }),
-  );
-  const required = (name: string): StellarSdk.xdr.ConfigSettingEntry => {
-    const setting = settings.get(
-      name as ReturnType<StellarSdk.xdr.ConfigSettingEntry["switch"]>["name"],
-    );
+  const settings = new Map<
+    StellarSdk.xdr.ConfigSettingEntry["type"],
+    Record<string, unknown>
+  >();
+  for (const entry of configuration.entries) {
+    const valObj = entry.val as unknown as Record<string, unknown>;
+    const setting =
+      typeof valObj.configSetting === "function"
+        ? (valObj.configSetting as () => Record<string, unknown>)()
+        : entry.val.type === "configSetting"
+          ? (entry.val.configSetting as unknown as Record<string, unknown>)
+          : undefined;
+    if (setting) {
+      const typeName =
+        typeof setting.switch === "function"
+          ? ((setting.switch as () => { name: string })()
+              .name as StellarSdk.xdr.ConfigSettingEntry["type"])
+          : (setting.type as StellarSdk.xdr.ConfigSettingEntry["type"]);
+      settings.set(typeName, setting);
+    }
+  }
+  const readField = <R = unknown>(obj: unknown, key: string): R => {
+    const rec = obj as Record<string, unknown>;
+    const v = rec[key];
+    return (typeof v === "function" ? (v as () => unknown)() : v) as R;
+  };
+  const required = (
+    name: StellarSdk.xdr.ConfigSettingEntry["type"],
+  ): Record<string, unknown> => {
+    const setting = settings.get(name);
     if (!setting) throw new Error(`Network fee setting unavailable: ${name}`);
     return setting;
   };
-  const ledger = required(
-    "configSettingContractLedgerCostV0",
-  ).contractLedgerCost();
-  const writeRate = BigInt(
-    required("configSettingContractLedgerCostExtV0")
-      .contractLedgerCostExt()
-      .feeWrite1Kb()
-      .toString(),
+  const ledger = readField<Record<string, unknown>>(
+    required("configSettingContractLedgerCostV0"),
+    "contractLedgerCost",
   );
-  const writes = BigInt(footprint.readWrite().length);
+  const ledgerExt = readField<Record<string, unknown>>(
+    required("configSettingContractLedgerCostExtV0"),
+    "contractLedgerCostExt",
+  );
+  const writeRate = BigInt(String(readField(ledgerExt, "feeWrite1Kb")));
+  const writes = BigInt(footprint.readWrite.length);
   const writeFee =
-    writes * BigInt(ledger.feeWriteLedgerEntry().toString()) +
-    ceilFee(BigInt(resources.writeBytes()), writeRate);
+    writes * BigInt(String(readField(ledger, "feeWriteLedgerEntry"))) +
+    ceilFee(BigInt(resources.writeBytes), writeRate);
   // Restoration reads archived entries from disk; extension uses live memory.
   const readFee =
     (operationType === "restore"
-      ? writes * BigInt(ledger.feeDiskReadLedgerEntry().toString())
+      ? writes * BigInt(String(readField(ledger, "feeDiskReadLedgerEntry")))
       : 0n) +
     ceilFee(
-      BigInt(resources.diskReadBytes()),
-      BigInt(ledger.feeDiskRead1Kb().toString()),
+      BigInt(resources.diskReadBytes),
+      BigInt(String(readField(ledger, "feeDiskRead1Kb"))),
     );
+  const compute = readField<Record<string, unknown>>(
+    required("configSettingContractComputeV0"),
+    "contractCompute",
+  );
   const cpuFee = ceilFee(
-    BigInt(resources.instructions()),
-    BigInt(
-      required("configSettingContractComputeV0")
-        .contractCompute()
-        .feeRatePerInstructionsIncrement()
-        .toString(),
-    ),
+    BigInt(resources.instructions),
+    BigInt(String(readField(compute, "feeRatePerInstructionsIncrement"))),
     INSTRUCTION_INCREMENT,
   );
   const txBytes = maintenanceTransactionSize(tx, data);
+  const historical = readField<Record<string, unknown>>(
+    required("configSettingContractHistoricalDataV0"),
+    "contractHistoricalData",
+  );
+  const bandwidth = readField<Record<string, unknown>>(
+    required("configSettingContractBandwidthV0"),
+    "contractBandwidth",
+  );
   const overhead =
     ceilFee(
       txBytes + 300n,
-      BigInt(
-        required("configSettingContractHistoricalDataV0")
-          .contractHistoricalData()
-          .feeHistorical1Kb()
-          .toString(),
-      ),
-    ) +
-    ceilFee(
-      txBytes,
-      BigInt(
-        required("configSettingContractBandwidthV0")
-          .contractBandwidth()
-          .feeTxSize1Kb()
-          .toString(),
-      ),
-    );
+      BigInt(String(readField(historical, "feeHistorical1Kb"))),
+    ) + ceilFee(txBytes, BigInt(String(readField(bandwidth, "feeTxSize1Kb"))));
   const nonRefundableFee = writeFee + readFee + cpuFee + overhead;
   if (totalResourceFee < nonRefundableFee)
     throw new Error(

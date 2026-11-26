@@ -1,23 +1,87 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import { ContractInvocation } from "../types";
+import {
+  AssetInfo,
+  ContractInvocation,
+  ContractType,
+  FootprintBreakdown,
+  FootprintStats,
+  SacContract,
+  StorageCategory,
+  TtlInfo,
+} from "../types";
+
+export type { ContractType };
 
 /**
  * Types of ledger keys that can appear in a footprint
  */
-export type LedgerKeyType =
-  | "ContractData"
-  | "ContractCode"
-  | "Account"
-  | "TrustLine"
-  | "Unknown";
+export enum LedgerKeyType {
+  CONTRACT_DATA = "ContractData",
+  CONTRACT_CODE = "ContractCode",
+  ACCOUNT = "Account",
+  TRUST_LINE = "TrustLine",
+  OFFER = "Offer",
+  DATA = "Data",
+  CLAIMABLE_BALANCE = "ClaimableBalance",
+  LIQUIDITY_POOL = "LiquidityPool",
+  CONFIG_SETTING = "ConfigSetting",
+  TTL = "Ttl",
+  UNKNOWN = "Unknown",
+}
 
 export interface FootprintEntry {
   /** Raw base64 is retained even if the SDK cannot decode a future key. */
   xdr: string;
   type: LedgerKeyType;
   contractId?: string;
+  accountId?: string;
+  storageType?: StorageCategory;
+  isSAC?: boolean;
+  assetInfo?: AssetInfo;
   ttlInfo?: TtlInfo;
+}
+
+function toBytes(val: unknown): Uint8Array {
+  if (val instanceof Uint8Array) return val;
+  if (val && typeof val === "object" && "value" in val) {
+    return (val as { value: Uint8Array }).value;
+  }
+  return val as Uint8Array;
+}
+
+function parseLedgerKey(raw: string): StellarSdk.xdr.LedgerKey | null {
+  try {
+    return StellarSdk.xdr.LedgerKey.fromXDR(raw, "base64");
+  } catch {
+    return null;
+  }
+}
+
+function extractTrustlineAssetInfo(
+  asset: StellarSdk.xdr.TrustLineAsset,
+): AssetInfo | undefined {
+  if (asset.type === "assetTypeCreditAlphanum4") {
+    return {
+      code: Buffer.from(toBytes(asset.alphaNum4.assetCode))
+        .toString("ascii")
+        .replace(/\0+$/, ""),
+      issuer: StellarSdk.StrKey.encodeEd25519PublicKey(
+        Buffer.from(toBytes(asset.alphaNum4.issuer.ed25519)),
+      ),
+    };
+  }
+  if (asset.type === "assetTypeCreditAlphanum12") {
+    return {
+      code: Buffer.from(toBytes(asset.alphaNum12.assetCode))
+        .toString("ascii")
+        .replace(/\0+$/, ""),
+      issuer: StellarSdk.StrKey.encodeEd25519PublicKey(
+        Buffer.from(toBytes(asset.alphaNum12.issuer.ed25519)),
+      ),
+    };
+  }
+  return undefined;
 }
 
 function classifyEntryType(key: StellarSdk.xdr.LedgerKey): LedgerKeyType {
@@ -52,16 +116,171 @@ export function parseFootprintEntries(entries: string[]): FootprintEntry[] {
     const key = parseLedgerKey(raw);
     if (!key) return { xdr: raw, type: LedgerKeyType.UNKNOWN };
     let contractId: string | undefined;
-    if (
-      key.type === "contractData" &&
-      key.contractData.contract.type === "scAddressTypeContract"
-    ) {
-      contractId = key.contractData.contract.contractId.toString();
+    let accountId: string | undefined;
+    let storageType: StorageCategory | undefined;
+    let assetInfo: AssetInfo | undefined;
+    if (key.type === "contractData") {
+      if (key.contractData.contract.type === "scAddressTypeContract") {
+        contractId = Buffer.from(
+          toBytes(key.contractData.contract.contractId),
+        ).toString("hex");
+      }
+      if (key.contractData.key.type === "scvLedgerKeyContractInstance") {
+        storageType = "contractInstance";
+      } else if (
+        key.contractData.durability ===
+        StellarSdk.xdr.ContractDataDurability.persistent
+      ) {
+        storageType = "persistentData";
+      } else {
+        storageType = "temporaryData";
+      }
     } else if (key.type === "contractCode") {
-      contractId = key.contractCode.hash.toString();
+      contractId = Buffer.from(toBytes(key.contractCode.hash)).toString("hex");
+      storageType = "contractCode";
+    } else if (key.type === "account") {
+      accountId = StellarSdk.StrKey.encodeEd25519PublicKey(
+        Buffer.from(toBytes(key.account.accountId.ed25519)),
+      );
+    } else if (key.type === "trustline") {
+      accountId = StellarSdk.StrKey.encodeEd25519PublicKey(
+        Buffer.from(toBytes(key.trustLine.accountId.ed25519)),
+      );
+      assetInfo = extractTrustlineAssetInfo(key.trustLine.asset);
     }
-    return { xdr: raw, type: classifyEntryType(key), contractId };
+    return {
+      xdr: raw,
+      type: classifyEntryType(key),
+      ...(contractId ? { contractId } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(storageType ? { storageType } : {}),
+      ...(assetInfo ? { assetInfo } : {}),
+    };
   });
+}
+
+export function isSacContract(
+  contractId: string,
+  asset: AssetInfo,
+  networkPassphrase: string = StellarSdk.Networks.TESTNET,
+): boolean {
+  try {
+    const stellarAsset =
+      asset.code === "XLM" && !asset.issuer
+        ? StellarSdk.Asset.native()
+        : asset.issuer
+          ? new StellarSdk.Asset(asset.code, asset.issuer)
+          : null;
+    if (!stellarAsset) return false;
+    const strKeyId = stellarAsset.contractId(networkPassphrase);
+    const hexId = Buffer.from(
+      StellarSdk.StrKey.decodeContract(strKeyId),
+    ).toString("hex");
+    return contractId === hexId || contractId === strKeyId;
+  } catch {
+    return false;
+  }
+}
+
+function parseAssetInfoFromScVal(
+  val: StellarSdk.xdr.ScVal,
+): AssetInfo | undefined {
+  if (val.type !== "scvContractInstance") return undefined;
+  const storage = val.instance.storage ?? [];
+  for (const entry of storage) {
+    const isAssetInfoKey =
+      (entry.key.type === "scvVec" &&
+        entry.key.vec?.[0]?.type === "scvSymbol" &&
+        entry.key.vec[0].sym.toString() === "AssetInfo") ||
+      (entry.key.type === "scvSymbol" &&
+        entry.key.sym.toString() === "AssetInfo");
+    if (!isAssetInfoKey) continue;
+    if (entry.val.type !== "scvVec" || !entry.val.vec?.length) continue;
+    const tag = entry.val.vec[0];
+    if (tag.type !== "scvSymbol") continue;
+    if (tag.sym.toString() === "Native") {
+      return { code: "XLM" };
+    }
+    if (
+      (tag.sym.toString() === "AlphaNum4" ||
+        tag.sym.toString() === "AlphaNum12") &&
+      entry.val.vec[1]?.type === "scvMap"
+    ) {
+      let code: string | undefined;
+      let issuer: string | undefined;
+      for (const kv of entry.val.vec[1].map ?? []) {
+        if (kv.key.type !== "scvSymbol") continue;
+        const k = kv.key.sym.toString();
+        if (k === "asset_code" && kv.val.type === "scvString") {
+          code = kv.val.str.toString();
+        } else if (k === "issuer" && kv.val.type === "scvBytes") {
+          issuer = StellarSdk.StrKey.encodeEd25519PublicKey(
+            Buffer.from(toBytes(kv.val.bytes)),
+          );
+        }
+      }
+      if (code && issuer) return { code, issuer };
+    }
+  }
+  return undefined;
+}
+
+export async function detectSacContracts(
+  entries: FootprintEntry[],
+  server: StellarSdk.rpc.Server,
+  networkPassphrase: string = StellarSdk.Networks.TESTNET,
+): Promise<SacContract[]> {
+  const instanceEntries = entries.filter(
+    (e) =>
+      e.type === LedgerKeyType.CONTRACT_DATA &&
+      e.storageType === "contractInstance" &&
+      e.contractId,
+  );
+  if (instanceEntries.length === 0) return [];
+
+  const sacs: SacContract[] = [];
+  for (const entry of instanceEntries) {
+    try {
+      const ledgerKey = StellarSdk.xdr.LedgerKey.fromXDR(entry.xdr, "base64");
+      const resp = await server.getLedgerEntries(ledgerKey);
+      const val = resp.entries?.[0]?.val;
+      if (!val || val.type !== "contractData") continue;
+      const assetInfo = parseAssetInfoFromScVal(val.contractData.val);
+      if (
+        assetInfo &&
+        entry.contractId &&
+        isSacContract(entry.contractId, assetInfo, networkPassphrase)
+      ) {
+        sacs.push({
+          contractId: entry.contractId,
+          isSAC: true,
+          assetInfo,
+        });
+      }
+    } catch {
+      // Keep footprints usable when SAC metadata lookup fails
+    }
+  }
+  return sacs;
+}
+
+export function mergeFootprints(
+  footprints: { readOnly: string[]; readWrite: string[] }[],
+): { readOnly: string[]; readWrite: string[] } {
+  const rwSet = new Set<string>();
+  const roSet = new Set<string>();
+  for (const fp of footprints) {
+    for (const k of fp.readWrite) rwSet.add(k);
+  }
+  for (const fp of footprints) {
+    for (const k of fp.readOnly) {
+      if (!rwSet.has(k)) roSet.add(k);
+    }
+  }
+  return {
+    readOnly: Array.from(roSet),
+    readWrite: Array.from(rwSet),
+  };
 }
 
 /**
@@ -204,10 +423,24 @@ export function calculateFootprintStats(
     "isSAC" | "assetInfo" | "breakdown"
   > = parseFootprint(footprint),
 ): FootprintStats {
+  const readOnlySizeBytes =
+    4 +
+    footprint.readOnly.reduce(
+      (sum, key) => sum + Buffer.from(key, "base64").length,
+      0,
+    );
+  const readWriteSizeBytes =
+    4 +
+    footprint.readWrite.reduce(
+      (sum, key) => sum + Buffer.from(key, "base64").length,
+      0,
+    );
   return {
     readOnlyCount: footprint.readOnly.length,
     readWriteCount: footprint.readWrite.length,
     totalEntries: footprint.readOnly.length + footprint.readWrite.length,
+    readOnlySizeBytes,
+    readWriteSizeBytes,
     estimatedSizeBytes: [...footprint.readOnly, ...footprint.readWrite].reduce(
       (sum, key) => sum + Buffer.from(key, "base64").length,
       0,
@@ -297,28 +530,28 @@ export function parseContractInvocation(
   hostFunction: StellarSdk.xdr.HostFunction,
   networkPassphrase: string,
 ): ContractInvocation | undefined {
-  switch (hostFunction.switch().name) {
+  switch (hostFunction.type) {
     case "hostFunctionTypeInvokeContract": {
-      const call = hostFunction.invokeContract();
+      const call = hostFunction.invokeContract;
       return {
         contractId: StellarSdk.Address.fromScAddress(
-          call.contractAddress(),
+          call.contractAddress,
         ).toString(),
-        functionName: call.functionName().toString(),
-        args: call.args().map((arg) => arg.toXDR("base64")),
+        functionName: call.functionName.toString(),
+        args: call.args.map((arg) => arg.toXDR("base64")),
       };
     }
     case "hostFunctionTypeCreateContract":
     case "hostFunctionTypeCreateContractV2": {
       const constructor =
-        hostFunction.switch().name === "hostFunctionTypeCreateContractV2";
+        hostFunction.type === "hostFunctionTypeCreateContractV2";
       const creation = constructor
-        ? hostFunction.createContractV2()
-        : hostFunction.createContract();
+        ? hostFunction.createContractV2
+        : hostFunction.createContract;
       const preimage = StellarSdk.xdr.HashIdPreimage.envelopeTypeContractId(
         new StellarSdk.xdr.HashIdPreimageContractId({
           networkId: StellarSdk.hash(Buffer.from(networkPassphrase)),
-          contractIdPreimage: creation.contractIdPreimage(),
+          contractIdPreimage: creation.contractIdPreimage,
         }),
       );
       return {
@@ -326,12 +559,12 @@ export function parseContractInvocation(
           StellarSdk.hash(preimage.toXDR()),
         ),
         functionName: constructor ? "__constructor" : "createContract",
-        args: constructor
-          ? hostFunction
-              .createContractV2()
-              .constructorArgs()
-              .map((arg) => arg.toXDR("base64"))
-          : [],
+        args:
+          hostFunction.type === "hostFunctionTypeCreateContractV2"
+            ? hostFunction.createContractV2.constructorArgs.map((arg) =>
+                arg.toXDR("base64"),
+              )
+            : [],
         isContractCreation: true,
       };
     }

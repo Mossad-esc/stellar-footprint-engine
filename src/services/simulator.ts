@@ -10,7 +10,6 @@ import {
   detectTokenContract,
   mergeFootprints,
   detectSacContracts,
-  calculateFootprintStats,
   type FootprintEntry,
   type ContractType,
 } from "./footprintParser";
@@ -26,7 +25,10 @@ import { buildCacheKey, getCache } from "../services/cache";
 import { getLatestLedger } from "../services/networkStatus";
 import { injectTraceHeaders, withSpan } from "../tracing";
 import {
+  AssetInfo,
+  FootprintBreakdown,
   FootprintStats,
+  SacContract,
   AuthEntry,
   ContractEvent,
   ContractInvocation,
@@ -38,16 +40,15 @@ import {
   SignerThresholdReport,
 } from "../types";
 import { rpcCircuitBreaker } from "../utils/circuitBreaker";
-import { singleflight } from "../utils/singleflight";
 import { withRetry } from "../utils/retry";
 import {
   sanitizeRpcError,
   type SanitizedRpcError,
 } from "../utils/rpcErrorSanitizer";
+import { singleflight } from "../utils/singleflight";
 
 /** Maximum ledger drift before a cached simulation is treated as stale. */
-const MAX_LEDGER_DRIFT =
-  parseInt(process.env.MAX_LEDGER_DRIFT ?? "1", 10) || 1;
+const MAX_LEDGER_DRIFT = parseInt(process.env.MAX_LEDGER_DRIFT ?? "1", 10) || 1;
 
 /** Match TTL records by ledger key hash, never by RPC response position. */
 function isTtlKey(key: StellarSdk.xdr.LedgerKey): boolean {
@@ -288,6 +289,7 @@ async function _processSimulationResult(
   cost: { cpuInsns: string; memBytes: string } | undefined,
   response: StellarSdk.rpc.Api.SimulateTransactionSuccessResponse,
   tx: StellarSdk.Transaction,
+  network: Network = "testnet",
 ): Promise<Partial<SimulateResult>> {
   const footprintXdr = transactionData.resources.footprint;
   const rawFootprint = {
@@ -319,9 +321,11 @@ async function _processSimulationResult(
 
   const [ttl, contractType, accounts] = await Promise.all([
     fetchTtlInfo(server, allXdrEntries, response),
-    contracts.length > 0
-      ? detectTokenContract(contracts[0], server)
-      : Promise.resolve<ContractType>("unknown"),
+    parsed.isSAC
+      ? Promise.resolve<ContractType>("sac")
+      : contracts.length > 0
+        ? detectTokenContract(contracts[0], server, networkPassphrase)
+        : Promise.resolve<ContractType>("unknown"),
     fetchTouchedAccounts(server, allXdrEntries, response),
   ]);
 
@@ -332,25 +336,49 @@ async function _processSimulationResult(
     (op) => op.type === "invokeHostFunction",
   );
   const invocation =
-    invocationOp?.type === "invokeHostFunction" &&
-    invocationOp.func.type === "hostFunctionTypeInvokeContract"
-      ? describeInvocation(invocationOp.func.invokeContract)
+    invocationOp?.type === "invokeHostFunction"
+      ? invocationOp.func.type === "hostFunctionTypeInvokeContract"
+        ? describeInvocation(invocationOp.func.invokeContract)
+        : parseContractInvocation(invocationOp.func, networkPassphrase)
       : undefined;
 
-  const footprintStats = calculateFootprintStats(merged, parsed);
+  if (
+    invocation?.isContractCreation &&
+    !hasContractCreationInstance(invocation, rawFootprint.readWrite)
+  ) {
+    return {
+      success: false,
+      error:
+        "Contract creation simulation is missing the writable contract instance key.",
+      code: ErrorCode.SIMULATION_DATA_MISSING,
+      invocation,
+      raw: response,
+    };
+  }
+
+  const footprintStats = calculateFootprintStats(
+    merged.readOnly,
+    merged.readWrite,
+    parsed,
+  );
 
   return {
     success: true,
     footprint: {
-      readOnly: optimizationResult.readOnly.map((entry) => ({
+      readOnly: parsed.readOnly.map((entry) => ({
         ...entry,
         ttlInfo: ttl[entry.xdr],
       })),
-      readWrite: optimizationResult.readWrite.map((entry) => ({
+      readWrite: parsed.readWrite.map((entry) => ({
         ...entry,
         ttlInfo: ttl[entry.xdr],
       })),
+      breakdown: parsed.breakdown,
     },
+    invocation,
+    contractId: invocation?.isContractCreation
+      ? invocation.contractId
+      : undefined,
     contracts,
     contractType,
     isSAC: parsed.isSAC,
@@ -366,7 +394,6 @@ async function _processSimulationResult(
     },
     ...authorization,
     signerThresholdReports,
-    invocation,
   };
 }
 
@@ -498,7 +525,9 @@ export async function simulateTransaction(
               () =>
                 server.simulateTransaction(
                   tx as StellarSdk.Transaction,
-                  simOptions as Parameters<typeof server.simulateTransaction>[1],
+                  simOptions as Parameters<
+                    typeof server.simulateTransaction
+                  >[1],
                 ),
               { "stellar.network": network },
             ),
@@ -546,7 +575,8 @@ export async function simulateTransaction(
       return {
         success: false,
         type: "restoration_required",
-        error: "Transaction requires ledger entry restoration before simulation.",
+        error:
+          "Transaction requires ledger entry restoration before simulation.",
         code: ErrorCode.SIMULATION_RESTORE_REQUIRED,
         ttl,
         ttlWarnings,
@@ -580,7 +610,11 @@ export async function simulateTransaction(
       responseCost,
       response,
       tx,
+      network,
     );
+    if (processed.success === false) {
+      return processed as SimulateResult;
+    }
     const ttl = processed.ttl ?? {};
     const ttlWarnings = buildTtlWarnings(ttl);
     const ledgerWarning = buildLedgerSequenceWarning(
@@ -616,13 +650,56 @@ export async function simulateTransaction(
     }
   }
   const cacheTtlMs = parseInt(process.env.CACHE_TTL_MS || "60000", 10);
-  await withSpan(
-    "cache.set",
-    () => cache.set(cacheKey, result, cacheTtlMs),
-    { "cache.key": cacheKey, "cache.backend": cache.backend },
-  );
+  await withSpan("cache.set", () => cache.set(cacheKey, result, cacheTtlMs), {
+    "cache.key": cacheKey,
+    "cache.backend": cache.backend,
+  });
 
   return result;
+}
+
+export function simulateDryRun(
+  xdr: string,
+  network: Network = "testnet",
+): DryRunResult {
+  const networkPassphrase =
+    network === "mainnet"
+      ? StellarSdk.Networks.PUBLIC
+      : network === "futurenet"
+        ? StellarSdk.Networks.FUTURENET
+        : StellarSdk.Networks.TESTNET;
+  const parsed = StellarSdk.TransactionBuilder.fromXDR(xdr, networkPassphrase);
+  const inner =
+    parsed instanceof StellarSdk.FeeBumpTransaction
+      ? parsed.innerTransaction
+      : parsed;
+  const operations = inner.operations.map((op) => ({
+    type: op.type,
+    source: op.source ?? null,
+    invocation:
+      op.type === "invokeHostFunction" && op.func
+        ? op.func.type === "hostFunctionTypeInvokeContract"
+          ? describeInvocation(op.func.invokeContract)
+          : parseContractInvocation(op.func, networkPassphrase)
+        : undefined,
+    authEntries:
+      op.type === "invokeHostFunction"
+        ? _extractAuthEntries(op.auth ?? [])
+        : undefined,
+    requiredSigners:
+      op.type === "invokeHostFunction"
+        ? extractRequiredSigners(op.auth ?? [], op.source ?? inner.source)
+            .requiredSigners
+        : undefined,
+  }));
+  return {
+    dryRun: true,
+    network,
+    sourceAccount: inner.source,
+    sequence: inner.sequence,
+    operationCount: operations.length,
+    operations,
+  };
 }
 
 /** ScVal maps retain their key types and wide integers never pass through Number. */
@@ -694,73 +771,6 @@ function describeInvocation(
     args: args.args.map(formatScVal),
     argTypes: types,
     interfaceEstimation: { name, basis: "function name and argument types" },
-  };
-}
-
-    const op = tx.operations[0];
-    const invocation =
-      op?.type === "invokeHostFunction" && op.func
-        ? parseContractInvocation(op.func, networkPassphrase)
-        : undefined;
-    if (
-      invocation?.isContractCreation &&
-      !hasContractCreationInstance(
-        invocation,
-        processed.rawFootprint?.readWrite ?? [],
-      )
-    ) {
-      return {
-        success: false,
-        error:
-          "Contract creation simulation is missing the writable contract instance key.",
-        code: ErrorCode.SIMULATION_DATA_MISSING,
-        invocation,
-        raw: response,
-      };
-    }
-
-    const ledgerWarning = buildLedgerSequenceWarning(
-      ledgerSequence,
-      response.latestLedger,
-    );
-    return {
-      success: true,
-      footprint: {
-        readOnly: processed.footprint?.readOnly ?? [],
-        readWrite: processed.footprint?.readWrite ?? [],
-      },
-      invocation,
-      contractId: invocation?.isContractCreation
-        ? invocation.contractId
-        : undefined,
-      contracts: processed.contracts,
-      contractType: processed.contractType,
-      ttl: processed.ttl,
-      optimized: processed.optimized,
-      rawFootprint: processed.rawFootprint,
-      footprintStats: processed.footprintStats,
-      cost: {
-        cpuInsns: responseCost?.cpuInsns ?? "0",
-        memBytes: responseCost?.memBytes ?? "0",
-      },
-      warnings: [
-        ...buildTtlWarnings(processed.ttl ?? {}),
-        ...(ledgerWarning ? [ledgerWarning] : []),
-      ],
-      requiredSigners: processed.requiredSigners,
-      threshold: processed.threshold,
-      raw: response,
-      upgradedFromV0: upgradedFromV0 || undefined,
-      diagnosticEvents,
-    };
-  });
-  return {
-    dryRun: true,
-    network,
-    sourceAccount: inner.source,
-    sequence: inner.sequence,
-    operationCount: operations.length,
-    operations,
   };
 }
 
@@ -883,10 +893,14 @@ function simulationAuth(
   const fromEnvelope = new Map(
     existing.map((entry) => [identity(entry), entry]),
   );
+  const rawAuth = response.result?.auth;
+  const authList = Array.isArray(rawAuth)
+    ? rawAuth
+    : rawAuth
+      ? [rawAuth]
+      : existing;
   // Prefer supplied signatures only when they authorize the same simulated tree.
-  return (response.result?.auth ?? existing).map(
-    (entry) => fromEnvelope.get(identity(entry)) ?? entry,
-  );
+  return authList.map((entry) => fromEnvelope.get(identity(entry)) ?? entry);
 }
 
 async function fetchTouchedAccounts(
@@ -1151,8 +1165,7 @@ export async function simulateDependentBatch(
         } catch (err) {
           return {
             success: false,
-            error:
-              err instanceof Error ? err.message : "Simulation failed",
+            error: err instanceof Error ? err.message : "Simulation failed",
             index: txIndex,
             tier: tierIndex,
           } as SimulateResult & { index: number; tier: number };

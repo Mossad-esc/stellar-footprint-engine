@@ -12,6 +12,7 @@ export class AppError extends Error {
     message: string,
     public statusCode: number = 500,
     public code?: import("../constants").ErrorCode,
+    public details?: unknown,
   ) {
     super(message);
     Object.setPrototypeOf(this, AppError.prototype);

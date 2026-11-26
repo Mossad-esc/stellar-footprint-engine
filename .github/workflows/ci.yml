@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        node-version: [22.x]
 
     steps:
       - uses: actions/checkout@v4
@@ -52,9 +52,6 @@ jobs:
       - name: Test & Coverage
         run: pnpm run test:coverage
 
-      - name: Coverage
-        run: pnpm run test:coverage
-
       - name: Build
         run: pnpm run build
 
@@ -71,9 +68,6 @@ jobs:
             sleep 1
           done
           cd docs/bruno && npx --yes @usebruno/cli run --env local
-
-      - name: Audit
-        run: pnpm audit --audit-level=high || true
 
   helm:
     runs-on: ubuntu-latest

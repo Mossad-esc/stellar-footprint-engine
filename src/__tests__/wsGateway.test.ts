@@ -132,17 +132,15 @@ describe("attachWsGateway", () => {
     };
 
     // Patch Server constructor to record the last instance
-    const OriginalServer = Server;
-    // Reset any prior patching
     let lastInstance: FakeWsServer | null = null;
     jest
       .spyOn(
-        jest.requireMock("ws") as { Server: typeof OriginalServer },
+        jest.requireMock("ws") as { Server: typeof FakeWsServer },
         "Server",
       )
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .mockImplementation(function (this: any, opts: Record<string, unknown>) {
-        lastInstance = new OriginalServer(opts) as FakeWsServer;
+        lastInstance = new FakeWsServer(opts) as FakeWsServer;
         return lastInstance;
       });
 

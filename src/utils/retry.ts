@@ -10,7 +10,33 @@ const RETRYABLE_CODES = new Set([
 ]);
 
 /** HTTP status codes that indicate a transient server-side condition */
-const RETRYABLE_HTTP_STATUSES = new Set([503]);
+export const RETRYABLE_HTTP_STATUSES = new Set([429, 502, 503, 504]);
+
+/**
+ * Parse an HTTP Retry-After header value (seconds or HTTP-date) into ms.
+ * Returns null when absent or unparseable.
+ */
+export function parseRetryAfterMs(
+  retryAfter: string | number | null | undefined,
+): number | undefined {
+  if (retryAfter === null || retryAfter === undefined) return undefined;
+  if (typeof retryAfter === "number") {
+    return Number.isFinite(retryAfter) && retryAfter >= 0
+      ? Math.min(300_000, retryAfter * 1000)
+      : undefined;
+  }
+  const trimmed = String(retryAfter).trim();
+  if (!trimmed) return undefined;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(300_000, seconds * 1000);
+  }
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs)) {
+    return Math.min(300_000, Math.max(0, dateMs - Date.now()));
+  }
+  return undefined;
+}
 
 /** Patterns in error messages that indicate a transient network issue */
 const RETRYABLE_MESSAGE_PATTERNS = [

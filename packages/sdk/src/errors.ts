@@ -12,7 +12,10 @@ export class StellarFootprintError extends Error {
       cause?: unknown;
     },
   ) {
-    super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
+    super(
+      message,
+      options?.cause !== undefined ? { cause: options.cause } : undefined,
+    );
     this.name = "StellarFootprintError";
     this.status = options?.status;
     this.code = options?.code;

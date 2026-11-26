@@ -62,19 +62,19 @@ export function sacInstanceEntry(
           new StellarSdk.xdr.ScMapEntry({
             key: StellarSdk.xdr.ScVal.scvSymbol("issuer"),
             val: StellarSdk.xdr.ScVal.scvBytes(
-              StellarSdk.StrKey.decodeEd25519PublicKey(asset.getIssuer()),
+              StellarSdk.StrKey.decodeEd25519PublicKey(asset.getIssuer() ?? ""),
             ),
           }),
         ]),
       ]);
   return StellarSdk.xdr.LedgerEntryData.contractData(
     new StellarSdk.xdr.ContractDataEntry({
-      ext: new StellarSdk.xdr.ExtensionPoint(0),
+      ext: StellarSdk.xdr.ExtensionPoint.v0(),
       contract: StellarSdk.Address.fromString(
         asset.contractId(StellarSdk.Networks.TESTNET),
       ).toScAddress(),
       key: StellarSdk.xdr.ScVal.scvLedgerKeyContractInstance(),
-      durability: StellarSdk.xdr.ContractDataDurability.persistent(),
+      durability: StellarSdk.xdr.ContractDataDurability.persistent,
       val: StellarSdk.xdr.ScVal.scvContractInstance(
         new StellarSdk.xdr.ScContractInstance({
           executable:
@@ -96,7 +96,7 @@ export function sacInstanceEntry(
 export function contractDataKey(
   id: number,
   key: StellarSdk.xdr.ScVal = StellarSdk.xdr.ScVal.scvSymbol("value"),
-  durability = StellarSdk.xdr.ContractDataDurability.persistent(),
+  durability = StellarSdk.xdr.ContractDataDurability.persistent,
   contractId = StellarSdk.StrKey.encodeContract(Buffer.alloc(32, id)),
 ): StellarSdk.xdr.LedgerKey {
   return StellarSdk.xdr.LedgerKey.contractData(

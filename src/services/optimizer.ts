@@ -1,5 +1,5 @@
-import { logger } from "../utils/logger";
 import type { FootprintEntry } from "./footprintParser";
+import { logger } from "../utils/logger";
 
 /**
  * Per-entry byte cost approximation for fee-savings calculation.

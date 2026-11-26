@@ -12,6 +12,8 @@ import {
  * Build a minimal Express app that applies the token bucket limiter to the
  * given method + path and returns 200 for requests that are not rate-limited.
  */
+let appSeq = 0;
+
 function buildApp(
   options: Partial<TokenBucketOptions> & {
     capacity: number;
@@ -22,7 +24,7 @@ function buildApp(
   store?: TokenBucketStore,
 ) {
   const limiter = createTokenBucketLimiter({
-    keyPrefix: "test",
+    keyPrefix: `test-${++appSeq}`,
     store,
     ...options,
   });
@@ -94,7 +96,9 @@ describe("token bucket — sustained traffic refill", () => {
 
     const refilled = await request(app).post("/simulate").send({});
     expect(refilled.status).toBe(200);
-    expect(Number(refilled.headers["x-ratelimit-remaining"])).toBeGreaterThanOrEqual(0);
+    expect(
+      Number(refilled.headers["x-ratelimit-remaining"]),
+    ).toBeGreaterThanOrEqual(0);
   });
 
   it("never refills beyond bucket capacity", async () => {
@@ -177,7 +181,12 @@ describe("token bucket — standard rate limit headers", () => {
 describe("token bucket — in-memory fallback", () => {
   it("uses the in-memory store when Redis is unavailable", async () => {
     const store = new InMemoryTokenBucketStore();
-    const app = buildApp({ capacity: 2, refillRatePerSec: 0.001 }, "post", "/simulate", store);
+    const app = buildApp(
+      { capacity: 2, refillRatePerSec: 0.001 },
+      "post",
+      "/simulate",
+      store,
+    );
 
     const first = await request(app).post("/simulate").send({});
     const second = await request(app).post("/simulate").send({});
@@ -190,7 +199,12 @@ describe("token bucket — in-memory fallback", () => {
 
   it("refills tokens over time in the in-memory store", async () => {
     const store = new InMemoryTokenBucketStore();
-    const app = buildApp({ capacity: 1, refillRatePerSec: 20 }, "post", "/simulate", store);
+    const app = buildApp(
+      { capacity: 1, refillRatePerSec: 20 },
+      "post",
+      "/simulate",
+      store,
+    );
 
     await request(app).post("/simulate").send({});
     const drained = await request(app).post("/simulate").send({});
@@ -223,7 +237,11 @@ describe("token bucket — in-memory fallback", () => {
 
 describe("token bucket — route coverage", () => {
   it("applies the limiter to GET /decode", async () => {
-    const app = buildApp({ capacity: 2, refillRatePerSec: 0.001 }, "get", "/decode");
+    const app = buildApp(
+      { capacity: 2, refillRatePerSec: 0.001 },
+      "get",
+      "/decode",
+    );
 
     await request(app).get("/decode").query({ xdr: "a" });
     await request(app).get("/decode").query({ xdr: "b" });

@@ -165,9 +165,9 @@ describe("apiKeyAuth middleware", () => {
       apiKeyAuth(req, makeRes(), next);
 
       expect(next).toHaveBeenCalledTimes(1);
-      expect((req as unknown as { apiKeyScopes?: string[] }).apiKeyScopes).toEqual(
-        ["simulate:read", "simulate:batch"],
-      );
+      expect(
+        (req as unknown as { apiKeyScopes?: string[] }).apiKeyScopes,
+      ).toEqual(["simulate:read", "simulate:batch"]);
     });
 
     it("passes requireScope when the key holds the required scope", () => {
@@ -198,8 +198,9 @@ describe("apiKeyAuth middleware", () => {
       expect(res.status).toHaveBeenCalledWith(403);
       expect(res.json).toHaveBeenCalledWith({
         success: false,
-        error: "Forbidden: missing required scope 'admin:cache'",
+        error: "Forbidden: API key lacks required scope 'admin:cache'",
         code: ErrorCode.FORBIDDEN,
+        requiredScope: "admin:cache",
       });
     });
 
@@ -253,7 +254,7 @@ describe("apiKeyAuth middleware", () => {
       expect(next).toHaveBeenCalledTimes(1);
       expect(
         (req as unknown as { apiKeyScopes?: string[] }).apiKeyScopes,
-      ).toBeUndefined();
+      ).toEqual(["*"]);
     });
   });
 });

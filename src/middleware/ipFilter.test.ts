@@ -299,10 +299,7 @@ describe("ipFilterMiddleware", () => {
   });
 
   describe("X-Forwarded-For handling with TRUSTED_PROXY_COUNT", () => {
-    const makeProxyReq = (
-      socketIp: string,
-      forwardedFor: string,
-    ): Request =>
+    const makeProxyReq = (socketIp: string, forwardedFor: string): Request =>
       ({
         ip: socketIp,
         socket: { remoteAddress: socketIp },
@@ -315,7 +312,11 @@ describe("ipFilterMiddleware", () => {
       load();
 
       const next = jest.fn();
-      middleware(makeProxyReq("127.0.0.1", "10.1.2.3, 127.0.0.1"), makeRes(), next);
+      middleware(
+        makeProxyReq("127.0.0.1", "10.1.2.3, 127.0.0.1"),
+        makeRes(),
+        next,
+      );
       expect(next).not.toHaveBeenCalled();
     });
 

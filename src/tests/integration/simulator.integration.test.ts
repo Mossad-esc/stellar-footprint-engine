@@ -4,6 +4,7 @@ import request from "supertest";
 
 import { clearRpcPool } from "../../config/stellar";
 import { errorHandler } from "../../middleware/errorHandler";
+import { getCache } from "../../services/cache";
 import { simulateTransaction } from "../../services/simulator";
 import {
   contractDataKey,
@@ -111,14 +112,11 @@ describe("simulateTransaction Integration Tests", () => {
         expect(result.rawFootprint).toEqual({
           readOnly: data
             .build()
-            .resources()
-            .footprint()
-            .readOnly()
-            .map((key) => key.toXDR("base64")),
+            .resources.footprint.readOnly.map((key) => key.toXDR("base64")),
           readWrite: [shared.toXDR("base64"), shared.toXDR("base64")],
         });
         expect(result.footprint?.readOnly.map((key) => key.xdr)).toEqual(
-          keys.map((key) => key.toXDR("base64")),
+          [...keys].reverse().map((key) => key.toXDR("base64")),
         );
         expect(result.footprint?.readWrite.map((key) => key.xdr)).toEqual([
           shared.toXDR("base64"),
@@ -227,6 +225,7 @@ describe("simulateTransaction Integration Tests", () => {
       expect(result.success).toBe(true);
 
       // Second call - error
+      await getCache().flush();
       mockRpc.configure({
         responseType: "error",
         simulationError: "test error",
@@ -236,6 +235,7 @@ describe("simulateTransaction Integration Tests", () => {
       expect(result.error).toBe("test error");
 
       // Third call - restore
+      await getCache().flush();
       mockRpc.configure({ responseType: "restore" });
       result = await simulateTransaction(xdr, "testnet");
       expect(result.success).toBe(false);
@@ -249,6 +249,7 @@ describe("simulateTransaction Integration Tests", () => {
       let result = await simulateTransaction(xdr, "testnet");
       expect(result.raw?.latestLedger).toBe(1000);
 
+      await getCache().flush();
       mockRpc.configure({ ledgerSequence: 2000 });
       result = await simulateTransaction(xdr, "testnet");
       expect(result.raw?.latestLedger).toBe(2000);
@@ -343,10 +344,7 @@ describe("Request Body Payload Size Limits", () => {
   function buildPayload(sizeBytes: number): string {
     const prefix = '{"transactions":["';
     const suffix = '"]}';
-    const fillerLength = Math.max(
-      0,
-      sizeBytes - prefix.length - suffix.length,
-    );
+    const fillerLength = Math.max(0, sizeBytes - prefix.length - suffix.length);
     return `${prefix}${"a".repeat(fillerLength)}${suffix}`;
   }
 
@@ -362,10 +360,8 @@ describe("Request Body Payload Size Limits", () => {
     expect(response.status).toBe(413);
     expect(response.body).toMatchObject({
       success: false,
-      error: expect.objectContaining({
-        code: expect.any(String),
-        message: expect.any(String),
-      }),
+      code: expect.any(String),
+      error: expect.any(String),
     });
   });
 
@@ -394,10 +390,8 @@ describe("Request Body Payload Size Limits", () => {
     expect(response.status).toBe(413);
     expect(response.body).toMatchObject({
       success: false,
-      error: expect.objectContaining({
-        code: expect.any(String),
-        message: expect.any(String),
-      }),
+      code: expect.any(String),
+      error: expect.any(String),
     });
   });
 

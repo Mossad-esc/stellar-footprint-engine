@@ -1,6 +1,7 @@
 export const fr = {
   MISSING_XDR: "Champ requis manquant : xdr",
-  UNSUPPORTED_ENVELOPE_TYPE: "Type d'enveloppe de transaction non pris en charge",
+  UNSUPPORTED_ENVELOPE_TYPE:
+    "Type d'enveloppe de transaction non pris en charge",
   INVALID_NETWORK:
     "Réseau invalide. Utilisez 'testnet', 'mainnet' ou 'futurenet'",
   RPC_URL_NOT_CONFIGURED: "URL RPC non configurée pour le réseau",
@@ -13,8 +14,7 @@ export const fr = {
   BAD_REQUEST: "Requête invalide",
   UNPROCESSABLE_ENTITY: "Entité non traitable",
   FORBIDDEN: "Accès interdit",
-  RATE_LIMIT_EXCEEDED:
-    "Trop de requêtes. Veuillez réessayer plus tard.",
+  RATE_LIMIT_EXCEEDED: "Trop de requêtes. Veuillez réessayer plus tard.",
   REQUEST_TIMEOUT: "La requête a expiré",
   REQUEST_TIMED_OUT: "La requête a expiré",
   CONTENT_TYPE_INVALID: "Content-Type doit être application/json",
@@ -37,4 +37,9 @@ export const fr = {
     "Service temporairement indisponible. Veuillez réessayer plus tard.",
   JOB_NOT_FOUND: "Tâche webhook introuvable",
   UNAUTHORIZED: "Non autorisé",
+  XDR_DEPTH_EXCEEDED: "Profondeur ou nombre de nœuds XDR dépassé",
+  INVALID_CONTRACT_ID:
+    "ID de contrat invalide : doit être un StrKey de contrat Stellar valide",
+  PAYLOAD_TOO_LARGE: "Charge utile trop volumineuse",
+  RPC_PAYLOAD_TOO_LARGE: "La réponse RPC dépasse la taille maximale autorisée",
 } as const;

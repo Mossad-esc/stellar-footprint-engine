@@ -1,4 +1,5 @@
 import * as http from "http";
+
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import {
@@ -167,34 +168,26 @@ function extractInvokedContract(
       "base64",
     );
     let operations: StellarSdk.xdr.Operation[] = [];
-    const envType = envelope.switch();
 
-    if (envType === StellarSdk.xdr.EnvelopeType.envelopeTypeTx()) {
-      operations = envelope.v1().tx().operations();
-    } else if (envType === StellarSdk.xdr.EnvelopeType.envelopeTypeTxV0()) {
-      operations = envelope.v0().tx().operations();
-    } else if (
-      envType === StellarSdk.xdr.EnvelopeType.envelopeTypeTxFeeBump()
-    ) {
-      operations = envelope.feeBump().tx().innerTx().v1().tx().operations();
+    if (envelope.type === "envelopeTypeTx") {
+      operations = envelope.v1.tx.operations;
+    } else if (envelope.type === "envelopeTypeTxV0") {
+      operations = envelope.v0.tx.operations;
+    } else if (envelope.type === "envelopeTypeTxFeeBump") {
+      operations = envelope.feeBump.tx.innerTx.v1.tx.operations;
     }
 
     for (const op of operations) {
-      const body = op.body();
-      if (
-        body.switch() === StellarSdk.xdr.OperationType.invokeHostFunction()
-      ) {
-        const hostFn = body.invokeHostFunctionOp().hostFunction();
-        if (
-          hostFn.switch() ===
-          StellarSdk.xdr.HostFunctionType.hostFunctionTypeInvokeContract()
-        ) {
-          const args = hostFn.invokeContract();
+      const body = op.body;
+      if (body.type === "invokeHostFunction") {
+        const hostFn = body.invokeHostFunctionOp.hostFunction;
+        if (hostFn.type === "hostFunctionTypeInvokeContract") {
+          const args = hostFn.invokeContract;
           return {
             contractId: StellarSdk.Address.fromScAddress(
-              args.contractAddress(),
+              args.contractAddress,
             ).toString(),
-            functionName: args.functionName().toString("utf8"),
+            functionName: args.functionName.toString(),
           };
         }
       }
@@ -244,9 +237,7 @@ function handleSimulateTransaction(
     const customFixture =
       invoked && config.contractFixtures?.[invoked.contractId];
     const tokenFixture =
-      invoked &&
-      config.useTokenFixtures !== false &&
-      !config.transactionData
+      invoked && config.useTokenFixtures !== false && !config.transactionData
         ? getFixtureByContractId(invoked.contractId, invoked.functionName)
             ?.simulateTransaction
         : undefined;

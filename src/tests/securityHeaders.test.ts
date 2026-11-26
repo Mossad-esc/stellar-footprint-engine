@@ -1,7 +1,7 @@
+import cors from "cors";
 import type { Express } from "express";
 import express from "express";
 import helmet from "helmet";
-import cors from "cors";
 import request from "supertest";
 
 /**
@@ -21,13 +21,18 @@ function buildOriginValidator(allowedOrigins: string[]) {
       const domain = trimmed.slice(2).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // Match the apex domain and any single-or-multi-level subdomain,
       // but never a lookalike such as `evil-stellar.org` or `stellar.org.evil.com`.
-      patterns.push(new RegExp(`^https?://(?:[a-z0-9-]+\\.)*${domain}(?::\\d+)?$`, "i"));
+      patterns.push(
+        new RegExp(`^https?://(?:[a-z0-9-]+\\.)*${domain}(?::\\d+)?$`, "i"),
+      );
     } else {
       exact.add(trimmed);
     }
   }
 
-  return (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+  return (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void,
+  ) => {
     if (!origin) {
       // Non-browser clients (no Origin header) are allowed.
       return callback(null, true);

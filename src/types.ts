@@ -60,7 +60,10 @@ export interface FootprintStats {
 }
 
 export type StorageCategory =
-  "contractCode" | "contractInstance" | "persistentData" | "temporaryData";
+  | "contractCode"
+  | "contractInstance"
+  | "persistentData"
+  | "temporaryData";
 
 export interface StorageStats {
   count: number;
@@ -264,7 +267,6 @@ export interface BatchSimulationResponse {
 }
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       /** Scopes granted to the authenticated API key, attached by apiKeyAuth. */

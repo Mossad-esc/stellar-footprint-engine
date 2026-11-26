@@ -35,8 +35,7 @@ export function initTracing(): NodeSDK | null {
   const traceExporter = new OTLPTraceExporter();
 
   sdk = new NodeSDK({
-    serviceName:
-      process.env.OTEL_SERVICE_NAME || "stellar-footprint-service",
+    serviceName: process.env.OTEL_SERVICE_NAME || "stellar-footprint-service",
     traceExporter,
     instrumentations: [getNodeAutoInstrumentations()],
   });

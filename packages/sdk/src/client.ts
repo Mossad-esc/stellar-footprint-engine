@@ -65,7 +65,10 @@ export class StellarFootprintClient {
     this.baseURL = normalizeBaseUrl(config.baseURL ?? DEFAULT_BASE_URL);
     this.timeout = config.timeout ?? DEFAULT_TIMEOUT_MS;
     this.retries = Math.max(0, config.retries ?? DEFAULT_RETRIES);
-    this.retryDelayMs = Math.max(0, config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+    this.retryDelayMs = Math.max(
+      0,
+      config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
+    );
     this.apiKey = config.apiKey;
     this.defaultHeaders = config.headers ?? {};
 
@@ -87,7 +90,9 @@ export class StellarFootprintClient {
     options: SimulateOptions = {},
   ): Promise<SimulateResult> {
     if (!xdr || typeof xdr !== "string") {
-      throw new StellarFootprintError("Transaction XDR must be a non-empty string");
+      throw new StellarFootprintError(
+        "Transaction XDR must be a non-empty string",
+      );
     }
 
     return this.request<SimulateResult>("/simulate", {

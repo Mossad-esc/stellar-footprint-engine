@@ -113,11 +113,11 @@ describe("webhook service", () => {
     global.fetch = mockFetch as unknown as typeof fetch;
 
     const jobId = createJob("https://example.com/hook");
-    await deliverWebhook(jobId, MOCK_SIMULATE_RESULT, 2);
+    await deliverWebhook(jobId, MOCK_SIMULATE_RESULT, 1);
 
     const job = getJob(jobId);
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(job?.status).toBe("failed");
+    expect(job?.status).toBe("dead_letter");
     expect(job?.attempts).toBe(2);
     expect(job?.completedAt).toBeDefined();
   });

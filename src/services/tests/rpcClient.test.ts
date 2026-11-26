@@ -139,9 +139,12 @@ describe("rpcClient & xdrParser", () => {
 
     afterEach(() => {
       resetRpcPool();
+      delete process.env.TESTNET_RPC_URL;
     });
 
     it("routes traffic proportionally towards the lowest-latency endpoint", async () => {
+      process.env.TESTNET_RPC_URL =
+        "https://fast.example.com,https://slow.example.com";
       const fastSimulate = jest.fn().mockResolvedValue({ id: "fast" });
       const slowSimulate = jest.fn().mockResolvedValue({ id: "slow" });
 
@@ -160,6 +163,8 @@ describe("rpcClient & xdrParser", () => {
       });
 
       // Seed latency samples: fast endpoint ~1ms, slow endpoint ~50ms.
+      recordEndpointResult("testnet", "https://fast.example.com", 1, false);
+      recordEndpointResult("testnet", "https://slow.example.com", 50, false);
       const fastServer = mockedGetRpcServer("https://fast.example.com");
       const slowServer = mockedGetRpcServer("https://slow.example.com");
       expect(fastServer).toBeDefined();
@@ -179,6 +184,8 @@ describe("rpcClient & xdrParser", () => {
     });
 
     it("penalizes endpoints that return 5xx errors", async () => {
+      process.env.TESTNET_RPC_URL =
+        "https://healthy.example.com,https://failing.example.com";
       const healthySimulate = jest.fn().mockResolvedValue({ id: "healthy" });
       const failingSimulate = jest
         .fn()

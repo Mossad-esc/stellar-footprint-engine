@@ -77,17 +77,19 @@ export interface SanitizedRpcError {
  * Strips stack traces, internal URLs, file paths, and provider-specific
  * identifiers before returning. Logs the raw error internally for debugging.
  */
-export function sanitizeRpcError(raw: unknown): string {
+export function sanitizeRpcError(raw: unknown): SanitizedRpcError {
   logger.debug({ rawError: raw }, "RPC simulation error (raw)");
 
   const rawText = extractErrorMessage(raw);
   if (!rawText) {
-    return DEFAULT_FALLBACK_ERROR;
+    return { message: DEFAULT_FALLBACK_ERROR };
   }
 
   // Detect raw HTML error pages (e.g., Cloudflare 500/502/504 proxy responses)
   if (/<(!doctype|html|head|body)\b/i.test(rawText)) {
-    return "RPC service returned an unexpected error. Please try again.";
+    return {
+      message: "RPC service returned an unexpected error. Please try again.",
+    };
   }
 
   // Strip stack traces (lines starting with "at " or "Error:")
@@ -126,29 +128,31 @@ export function sanitizeRpcError(raw: unknown): string {
   if (/exceeded.*instructions|cpu.*limit/i.test(sanitized)) {
     return {
       message: "Transaction exceeded CPU instruction limit.",
-      remediation: "Consider splitting the operation into multiple transactions or optimizing loops.",
+      remediation:
+        "Consider splitting the operation into multiple transactions or optimizing loops.",
       resourceExceeded: "cpu_instructions",
     };
   }
   if (/exceeded.*memory|memory.*limit/i.test(sanitized)) {
     return {
       message: "Transaction exceeded memory limit.",
-      remediation: "Reduce the contract's memory footprint by minimizing data structures or splitting operations.",
+      remediation:
+        "Reduce the contract's memory footprint by minimizing data structures or splitting operations.",
       resourceExceeded: "memory_bytes",
     };
   }
   if (/host.*error|host.*panic|panicked|wasm.*trap/i.test(sanitized)) {
-    return "Contract execution failed during simulation.";
+    return { message: "Contract execution failed during simulation." };
   }
   if (
     /network.*timeout|connection.*refused|econnrefused|etimedout|econnreset|enotfound|timeout.*exceeded/i.test(
       sanitized,
     )
   ) {
-    return "RPC network error. Please try again.";
+    return { message: "RPC network error. Please try again." };
   }
 
-  return sanitized || DEFAULT_FALLBACK_ERROR;
+  return { message: sanitized || DEFAULT_FALLBACK_ERROR };
 }
 
 /**

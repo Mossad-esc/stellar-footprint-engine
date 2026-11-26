@@ -29,11 +29,13 @@ export function getRestorePreamble(
       ? new StellarSdk.SorobanDataBuilder(preamble.transactionData).build()
       : preamble.transactionData.build();
   const minimum = BigInt(preamble.minResourceFee);
-  const encoded = BigInt(data.resourceFee().toString());
+  const encoded = BigInt(data.resourceFee.toString());
   if (minimum < 0n || encoded < 0n)
     throw new Error("Invalid restoration resource fee");
   const minResourceFee = minimum > encoded ? minimum : encoded;
-  data.resourceFee(StellarSdk.xdr.Int64.fromString(minResourceFee.toString()));
+  Object.assign(data, {
+    resourceFee: StellarSdk.xdr.Int64.fromString(minResourceFee.toString()),
+  });
   return { transactionData: data, minResourceFee };
 }
 
@@ -54,7 +56,7 @@ export async function buildRestoreTransaction(
 
   if (!preamble) {
     if ("error" in response && response.error) {
-      throw new Error(sanitizeRpcError(response.error));
+      throw new Error(sanitizeRpcError(response.error).message);
     }
     return { needsRestore: false };
   }

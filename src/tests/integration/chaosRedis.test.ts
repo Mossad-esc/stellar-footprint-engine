@@ -48,6 +48,13 @@ const mockClient = createMockClient();
 
 jest.mock("ioredis", () => jest.fn(() => mockClient));
 
+jest.mock("@middleware/rateLimiter", () => ({
+  simulateRateLimiter: (_req: unknown, _res: unknown, next: () => void) =>
+    next(),
+  decodeRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
+  feeRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 jest.mock("@middleware/metrics", () => ({
   __esModule: true,
   default: {
@@ -59,11 +66,17 @@ jest.mock("@middleware/metrics", () => ({
     recordCacheMiss: jest.fn(),
     recordRpcError: jest.fn(),
     recordCacheLatency: jest.fn(),
+    recordCacheOperation: jest.fn(),
+    recordMemoryCacheKeys: jest.fn(),
+    recordMemoryCacheBytes: jest.fn(),
+    recordL1Hit: jest.fn(),
+    recordL1Miss: jest.fn(),
+    recordL2Hit: jest.fn(),
+    recordL2Miss: jest.fn(),
     recordXdrBytes: jest.fn(),
     getMetrics: jest.fn().mockResolvedValue(""),
   },
-  metricsMiddleware: (_req: unknown, _res: unknown, next: () => void) =>
-    next(),
+  metricsMiddleware: (_req: unknown, _res: unknown, next: () => void) => next(),
   metrics: { getMetrics: jest.fn().mockResolvedValue("") },
 }));
 
@@ -110,7 +123,7 @@ import { getCache } from "../../services/cache";
 // Test helpers
 // ---------------------------------------------------------------------------
 
-const VALID_XDR = "AAAAAgAAAAC" + "A".repeat(40) + "==";
+const VALID_XDR = "AAAAAgAAAAC" + "A".repeat(39) + "==";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

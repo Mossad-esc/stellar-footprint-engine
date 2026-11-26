@@ -1,5 +1,51 @@
 import pino from "pino";
 
+const STELLAR_SECRET_KEY_REGEX = /\bS[A-Z0-9]{55,}\b/g;
+
+/**
+ * Recursively scrubs Stellar secret keys (StrKey S...) from strings, Errors,
+ * arrays, and plain objects before logging.
+ */
+export function scrubStellarSecretKeys<T>(
+  input: T,
+  seen: WeakSet<object> = new WeakSet(),
+): T {
+  if (typeof input === "string") {
+    return input.replace(STELLAR_SECRET_KEY_REGEX, "[REDACTED]") as T;
+  }
+  if (input === null || typeof input !== "object") {
+    return input;
+  }
+  if (seen.has(input)) {
+    return input;
+  }
+  seen.add(input);
+
+  if (input instanceof Error) {
+    const scrubbedErr = new Error(
+      input.message.replace(STELLAR_SECRET_KEY_REGEX, "[REDACTED]"),
+    );
+    scrubbedErr.name = input.name;
+    if (input.stack) {
+      scrubbedErr.stack = input.stack.replace(
+        STELLAR_SECRET_KEY_REGEX,
+        "[REDACTED]",
+      );
+    }
+    return scrubbedErr as T;
+  }
+
+  if (Array.isArray(input)) {
+    return input.map((item) => scrubStellarSecretKeys(item, seen)) as T;
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    out[k] = scrubStellarSecretKeys(v, seen);
+  }
+  return out as T;
+}
+
 const LOG_LEVEL = process.env.LOG_LEVEL ?? "info";
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -40,9 +86,9 @@ const productionOptions: pino.LoggerOptions = {
     paths: [
       "req.headers.authorization",
       'req.headers["authorization"]',
-      'req.headers[\'authorization\']',
-      "req.headers[\"x-api-key\"]",
-      'req.headers[\'x-api-key\']',
+      "req.headers['authorization']",
+      'req.headers["x-api-key"]',
+      "req.headers['x-api-key']",
       "req.body.secretKey",
       "secretKey",
       "MAINNET_SECRET_KEY",
@@ -56,7 +102,7 @@ const productionOptions: pino.LoggerOptions = {
   hooks: {
     logMethod(inputArgs, method) {
       const scrubbedArgs = inputArgs.map((arg) => scrubStellarSecretKeys(arg));
-      return method.apply(this, scrubbedArgs as [any, ...any[]]);
+      return method.apply(this, scrubbedArgs as Parameters<typeof method>);
     },
   },
 };

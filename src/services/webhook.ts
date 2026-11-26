@@ -148,6 +148,11 @@ export async function deliverWebhook(
       };
       if (signature) {
         headers["X-Signature-SHA256"] = `t=${timestamp},v1=${signature}`;
+        const secret = process.env.WEBHOOK_SECRET;
+        if (secret) {
+          headers["X-Webhook-Signature"] =
+            `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+        }
       }
 
       fetch(current.webhookUrl, {

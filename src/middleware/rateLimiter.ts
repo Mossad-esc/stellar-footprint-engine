@@ -14,6 +14,48 @@ import { ErrorCode } from "../constants";
  * unavailable, the limiter transparently falls back to an in-memory bucket.
  */
 
+export interface TokenBucketStore {
+  consume(
+    key: string,
+    config: TokenBucketConfig,
+    nowMs: number,
+    cost?: number,
+  ): Promise<TokenBucketResult> | TokenBucketResult;
+}
+
+export class InMemoryTokenBucketStore implements TokenBucketStore {
+  private readonly buckets = new Map<string, MemoryBucket>();
+
+  consume(
+    key: string,
+    config: TokenBucketConfig,
+    nowMs: number,
+    cost = 1,
+  ): TokenBucketResult {
+    const { capacity, refillRatePerSec } = config;
+    let bucket = this.buckets.get(key);
+    if (!bucket) {
+      bucket = { tokens: capacity, lastMs: nowMs };
+      this.buckets.set(key, bucket);
+    } else {
+      const elapsedSec = Math.max(0, (nowMs - bucket.lastMs) / 1000);
+      bucket.tokens = Math.min(
+        capacity,
+        bucket.tokens + elapsedSec * refillRatePerSec,
+      );
+      bucket.lastMs = nowMs;
+    }
+
+    let allowed = false;
+    if (bucket.tokens >= cost) {
+      bucket.tokens -= cost;
+      allowed = true;
+    }
+
+    return buildResult(allowed, bucket.tokens, config, nowMs);
+  }
+}
+
 export interface TokenBucketConfig {
   /** Maximum number of tokens (max burst). */
   capacity: number;
@@ -21,7 +63,11 @@ export interface TokenBucketConfig {
   refillRatePerSec: number;
   /** Optional key prefix to namespace buckets per tier. */
   keyPrefix?: string;
+  /** Optional custom store (e.g. InMemoryTokenBucketStore for tests). */
+  store?: TokenBucketStore;
 }
+
+export type TokenBucketOptions = TokenBucketConfig;
 
 export interface TokenBucketResult {
   allowed: boolean;
@@ -55,7 +101,7 @@ function resolveRedis(): RedisLike | null {
   }
   try {
     // Lazily require to avoid a hard dependency / circular imports.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const mod = require("../config/redis");
     const candidate =
       mod?.redisClient ?? mod?.redis ?? mod?.default ?? mod?.client ?? null;
@@ -64,7 +110,7 @@ function resolveRedis(): RedisLike | null {
   } catch {
     cachedRedis = null;
   }
-  return cachedRedis;
+  return cachedRedis ?? null;
 }
 
 /** Test hook: override the resolved Redis client (pass null to force fallback). */
@@ -176,7 +222,9 @@ function buildResult(
   // Time until the bucket is full again.
   const missing = Math.max(0, capacity - tokens);
   const secondsToFull =
-    refillRatePerSec > 0 ? missing / refillRatePerSec : Number.POSITIVE_INFINITY;
+    refillRatePerSec > 0
+      ? missing / refillRatePerSec
+      : Number.POSITIVE_INFINITY;
   const resetAt = Number.isFinite(secondsToFull)
     ? Math.ceil(nowMs / 1000 + secondsToFull)
     : Math.ceil(nowMs / 1000);
@@ -276,7 +324,15 @@ export function createTokenBucketLimiter(config: TokenBucketConfig) {
     const key = bucketKey(config, req);
     let result: TokenBucketResult;
     try {
-      result = await consumeToken(key, config);
+      if (config.store) {
+        try {
+          result = await config.store.consume(key, config, Date.now());
+        } catch {
+          result = consumeMemory(key, config, Date.now(), 1);
+        }
+      } else {
+        result = await consumeToken(key, config);
+      }
     } catch {
       // Never block traffic due to limiter failures.
       next();

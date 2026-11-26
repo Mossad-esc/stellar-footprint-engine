@@ -121,11 +121,15 @@ describe("buildRestoreTransaction", () => {
     expect(parsedRestoreTx.operations).toHaveLength(1);
     expect(parsedRestoreTx.operations[0].type).toBe("restoreFootprint");
     expect(parsedRestoreTx.fee).toBe(result.fee);
-    const data = parsedRestoreTx.toEnvelope().v1().tx().ext().sorobanData();
-    expect(data.resources().footprint().readWrite()[0].toXDR()).toEqual(
+    const env = parsedRestoreTx.toEnvelope();
+    if (env.type !== "envelopeTypeTx" || !("sorobanData" in env.v1.tx.ext)) {
+      throw new Error("Expected v1 envelope with sorobanData");
+    }
+    const data = env.v1.tx.ext.sorobanData;
+    expect(data.resources.footprint.readWrite[0].toXDR()).toEqual(
       ledgerKey.toXDR(),
     );
-    expect(data.resourceFee().toString()).toBe("5000");
+    expect(data.resourceFee.toString()).toBe("5000");
     expect(parsedRestoreTx.signatures).toHaveLength(0);
   });
 
@@ -202,18 +206,18 @@ describe("archived contract code restoration", () => {
         result.restoreXdr ?? "",
         StellarSdk.Networks.TESTNET,
       ) as StellarSdk.Transaction;
-      const actual = tx.toEnvelope().v1().tx().ext().sorobanData();
+      const env = tx.toEnvelope();
+      if (env.type !== "envelopeTypeTx" || !("sorobanData" in env.v1.tx.ext)) {
+        throw new Error("Expected v1 envelope with sorobanData");
+      }
+      const actual = env.v1.tx.ext.sorobanData;
       expect(tx.operations[0].type).toBe("restoreFootprint");
-      expect(actual.resources().footprint().readOnly()).toEqual([]);
+      expect(actual.resources.footprint.readOnly).toEqual([]);
       expect(
-        actual
-          .resources()
-          .footprint()
-          .readWrite()
-          .map((k) => k.toXDR("base64")),
+        actual.resources.footprint.readWrite.map((k) => k.toXDR("base64")),
       ).toEqual([instance, code].map((k) => k.toXDR("base64")));
-      expect(actual.resources().writeBytes()).toBe(bytes);
-      expect(actual.resourceFee().toString()).toBe(resourceFee.toString());
+      expect(actual.resources.writeBytes).toBe(bytes);
+      expect(actual.resourceFee.toString()).toBe(resourceFee.toString());
       expect(tx.fee).toBe((100n + resourceFee).toString());
     },
   );

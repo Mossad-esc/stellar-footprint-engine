@@ -225,9 +225,7 @@ describe("Health Endpoints", () => {
         flush: jest.fn().mockResolvedValue(undefined),
       };
       jest.spyOn(cacheModule, "getCache").mockReturnValue(mockCache);
-      jest
-        .spyOn(cacheModule, "isCacheFallbackEnabled")
-        .mockReturnValue(true);
+      jest.spyOn(cacheModule, "isCacheFallbackEnabled").mockReturnValue(true);
 
       // Mock circuit breaker as healthy
       (rpcCircuitBreaker.getState as jest.Mock).mockReturnValue({
@@ -262,9 +260,7 @@ describe("Health Endpoints", () => {
         flush: jest.fn().mockResolvedValue(undefined),
       };
       jest.spyOn(cacheModule, "getCache").mockReturnValue(mockCache);
-      jest
-        .spyOn(cacheModule, "isCacheFallbackEnabled")
-        .mockReturnValue(false);
+      jest.spyOn(cacheModule, "isCacheFallbackEnabled").mockReturnValue(false);
 
       // Mock circuit breaker as healthy
       (rpcCircuitBreaker.getState as jest.Mock).mockReturnValue({

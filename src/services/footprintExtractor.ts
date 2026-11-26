@@ -9,15 +9,23 @@ import {
   type FootprintEntry,
   type ContractType,
 } from "./footprintParser";
-import { optimizeFootprint } from "./optimizer";
-import { getRpcServer, Network } from "../config/stellar";
-import { FootprintStats } from "../types";
+import { getNetworkConfig, getRpcServer, Network } from "../config/stellar";
+import {
+  AssetInfo,
+  FootprintBreakdown,
+  FootprintStats,
+  SacContract,
+} from "../types";
 
 /** Exact LedgerFootprint wire sizes, including both XDR array length prefixes. */
 export function calculateFootprintStats(
   readOnly: string[],
   readWrite: string[],
-): FootprintStats {
+  parsed?: Pick<
+    ReturnType<typeof parseFootprint>,
+    "isSAC" | "assetInfo" | "breakdown"
+  >,
+): FootprintStats & { readOnlySizeBytes: number; readWriteSizeBytes: number } {
   const footprint = new StellarSdk.xdr.LedgerFootprint({
     readOnly: readOnly.map((key) =>
       StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
@@ -26,17 +34,19 @@ export function calculateFootprintStats(
       StellarSdk.xdr.LedgerKey.fromXDR(key, "base64"),
     ),
   });
+  const resolved = parsed ?? parseFootprint({ readOnly, readWrite });
   return {
     readOnlyCount: readOnly.length,
     readWriteCount: readWrite.length,
     totalEntries: readOnly.length + readWrite.length,
     readOnlySizeBytes:
-      4 +
-      footprint.readOnly().reduce((sum, key) => sum + key.toXDR().length, 0),
+      4 + footprint.readOnly.reduce((sum, key) => sum + key.toXDR().length, 0),
     readWriteSizeBytes:
-      4 +
-      footprint.readWrite().reduce((sum, key) => sum + key.toXDR().length, 0),
+      4 + footprint.readWrite.reduce((sum, key) => sum + key.toXDR().length, 0),
     estimatedSizeBytes: footprint.toXDR().length,
+    isSAC: resolved.isSAC,
+    ...(resolved.assetInfo ? { assetInfo: resolved.assetInfo } : {}),
+    breakdown: resolved.breakdown,
   };
 }
 
@@ -72,11 +82,12 @@ export async function extractFootprint(
     | readonly StellarSdk.rpc.Api.SimulateTransactionSuccessResponse[],
   network: Network,
 ): Promise<ExtractedFootprint> {
-  if (!response.transactionData) {
+  const singleResponse = Array.isArray(response) ? response[0] : response;
+  if (!singleResponse?.transactionData) {
     throw new Error("Simulation succeeded but transactionData is missing");
   }
 
-  const footprint = response.transactionData.build().resources.footprint;
+  const footprint = singleResponse.transactionData.build().resources.footprint;
   const rawFootprint = {
     readOnly: footprint.readOnly.map((e: StellarSdk.xdr.LedgerKey) =>
       e.toXDR("base64"),
@@ -144,27 +155,28 @@ export async function extractFootprint(
 export function extractEnvelopeFootprint(
   envelope: StellarSdk.xdr.TransactionEnvelope,
 ): { readOnly: string[]; readWrite: string[] } {
-  const type = envelope.switch().name;
   const tx =
-    type === "envelopeTypeTxFeeBump"
-      ? envelope.feeBump().tx().innerTx().v1().tx()
-      : type === "envelopeTypeTx"
-        ? envelope.v1().tx()
+    envelope.type === "envelopeTypeTxFeeBump"
+      ? envelope.feeBump.tx.innerTx.v1.tx
+      : envelope.type === "envelopeTypeTx"
+        ? envelope.v1.tx
         : undefined;
-  if (!tx || tx.ext().switch() !== 1) return { readOnly: [], readWrite: [] };
-  const hasSorobanOperation = tx
-    .operations()
-    .some((operation) =>
-      ["invokeHostFunction", "extendFootprintTtl", "restoreFootprint"].includes(
-        operation.body().switch().name,
-      ),
-    );
+  if (!tx || !("sorobanData" in tx.ext)) return { readOnly: [], readWrite: [] };
+  const hasSorobanOperation = tx.operations.some((operation) =>
+    ["invokeHostFunction", "extendFootprintTtl", "restoreFootprint"].includes(
+      operation.body.type,
+    ),
+  );
   if (!hasSorobanOperation) return { readOnly: [], readWrite: [] };
-  const footprint = tx.ext().sorobanData().resources().footprint();
+  const footprint = tx.ext.sorobanData.resources.footprint;
   return mergeFootprints([
     {
-      readOnly: footprint.readOnly().map((key) => key.toXDR("base64")),
-      readWrite: footprint.readWrite().map((key) => key.toXDR("base64")),
+      readOnly: footprint.readOnly.map((key: StellarSdk.xdr.LedgerKey) =>
+        key.toXDR("base64"),
+      ),
+      readWrite: footprint.readWrite.map((key: StellarSdk.xdr.LedgerKey) =>
+        key.toXDR("base64"),
+      ),
     },
   ]);
 }

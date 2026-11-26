@@ -6,6 +6,12 @@ import {
   PREDICTED_CONTRACT,
 } from "../../tests/fixtures/deployment";
 import {
+  TEST_ACCOUNT,
+  sacFootprint,
+  sacInstanceEntry,
+  contractDataKey,
+} from "../../tests/fixtures/footprints";
+import {
   parseFootprint,
   parseContractInvocation,
   hasContractCreationInstance,
@@ -48,7 +54,7 @@ describe("storage breakdown", () => {
     const temporary = contractDataKey(
       1,
       StellarSdk.xdr.ScVal.scvString("session"),
-      StellarSdk.xdr.ContractDataDurability.temporary(),
+      StellarSdk.xdr.ContractDataDurability.temporary,
     ).toXDR("base64");
     const footprint = {
       readOnly: [CONTRACT_CODE_XDR, persistent, ACCOUNT_XDR],
@@ -94,7 +100,7 @@ describe("storage breakdown", () => {
     const temporary = contractDataKey(
       1,
       StellarSdk.xdr.ScVal.scvSymbol("INSTANCE"),
-      StellarSdk.xdr.ContractDataDurability.temporary(),
+      StellarSdk.xdr.ContractDataDurability.temporary,
     );
     const result = parseFootprint({
       readOnly: [persistent.toXDR("base64"), temporary.toXDR("base64")],
@@ -125,10 +131,10 @@ describe("storage breakdown", () => {
 
 describe("Stellar Asset Contract metadata", () => {
   function raw(data: StellarSdk.SorobanDataBuilder) {
-    const footprint = data.build().resources().footprint();
+    const footprint = data.build().resources.footprint;
     return {
-      readOnly: footprint.readOnly().map((key) => key.toXDR("base64")),
-      readWrite: footprint.readWrite().map((key) => key.toXDR("base64")),
+      readOnly: footprint.readOnly.map((key) => key.toXDR("base64")),
+      readWrite: footprint.readWrite.map((key) => key.toXDR("base64")),
     };
   }
 
@@ -148,8 +154,10 @@ describe("Stellar Asset Contract metadata", () => {
       expect(result.assetInfo).toEqual(assetInfo);
       expect(result.sacContracts).toEqual([
         {
-          contractId: StellarSdk.StrKey.decodeContract(
-            asset.contractId(StellarSdk.Networks.TESTNET),
+          contractId: Buffer.from(
+            StellarSdk.StrKey.decodeContract(
+              asset.contractId(StellarSdk.Networks.TESTNET),
+            ),
           ).toString("hex"),
           isSAC: true,
           assetInfo,
@@ -520,7 +528,10 @@ describe("contract creation and constructor invocation", () => {
       "__constructor",
       StellarSdk.nativeToScVal(42, { type: "u32" }),
     );
-    const host = op.body().invokeHostFunctionOp().hostFunction();
+    if (op.body.type !== "invokeHostFunction") {
+      throw new Error("Expected invokeHostFunction");
+    }
+    const host = op.body.invokeHostFunctionOp.hostFunction;
     expect(parseContractInvocation(host, StellarSdk.Networks.TESTNET)).toEqual({
       contractId: PREDICTED_CONTRACT,
       functionName: "__constructor",

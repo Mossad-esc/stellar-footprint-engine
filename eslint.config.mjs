@@ -70,9 +70,9 @@ const srcConfig = {
   },
 };
 
-// Exempt logger utility from no-console rule
+// Exempt logger utility and CLI from no-console rule
 const loggerExemption = {
-  files: ["src/utils/logger.ts"],
+  files: ["src/utils/logger.ts", "src/cli/index.ts"],
   rules: {
     "no-console": "off",
   },

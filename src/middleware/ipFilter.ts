@@ -33,7 +33,9 @@ function normalizeIp(ip: string): string {
   return trimmed;
 }
 
-function parseCidrEntry(entry: string): { range: string; prefix: number } | null {
+function parseCidrEntry(
+  entry: string,
+): { range: string; prefix: number } | null {
   const parts = entry.split("/");
   if (parts.length > 2) return null;
   const range = normalizeIp(parts[0] || "");
@@ -108,7 +110,7 @@ function matchesAny(ip: string, cidrs: string[]): boolean {
 
 function getClientIp(req: Request): string {
   if (trustedProxyCount > 0) {
-    const header = req.headers["x-forwarded-for"];
+    const header = req.headers?.["x-forwarded-for"];
     const raw = Array.isArray(header) ? header.join(",") : header;
     if (raw) {
       const chain = raw

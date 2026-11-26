@@ -1,5 +1,7 @@
 import { Writable } from "stream";
+
 import pino from "pino";
+
 import { logger, scrubStellarSecretKeys } from "../logger";
 
 describe("logger redaction and sanitization", () => {
@@ -24,9 +26,9 @@ describe("logger redaction and sanitization", () => {
           paths: [
             "req.headers.authorization",
             'req.headers["authorization"]',
-            'req.headers[\'authorization\']',
-            "req.headers[\"x-api-key\"]",
-            'req.headers[\'x-api-key\']',
+            "req.headers['authorization']",
+            'req.headers["x-api-key"]',
+            "req.headers['x-api-key']",
             "req.body.secretKey",
             "secretKey",
             "MAINNET_SECRET_KEY",
@@ -39,8 +41,13 @@ describe("logger redaction and sanitization", () => {
         },
         hooks: {
           logMethod(inputArgs, method) {
-            const scrubbedArgs = inputArgs.map((arg) => scrubStellarSecretKeys(arg));
-            return method.apply(this, scrubbedArgs as [any, ...any[]]);
+            const scrubbedArgs = inputArgs.map((arg) =>
+              scrubStellarSecretKeys(arg),
+            );
+            return method.apply(
+              this,
+              scrubbedArgs as Parameters<typeof method>,
+            );
           },
         },
       },
@@ -65,7 +72,8 @@ describe("logger redaction and sanitization", () => {
   });
 
   it("scrubs Stellar secret keys (StrKey S...) from log messages and objects", () => {
-    const validSecret = "S" + "A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R9S0T1U2V3W4X5Y6Z7A8B9C";
+    const validSecret =
+      "S" + "A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R9S0T1U2V3W4X5Y6Z7A8B9C";
 
     testLogger.info({
       req: {
@@ -83,7 +91,8 @@ describe("logger redaction and sanitization", () => {
   });
 
   it("scrubs Stellar secret keys in Error objects and stack traces", () => {
-    const validSecret = "S" + "A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R9S0T1U2V3W4X5Y6Z7A8B9C";
+    const validSecret =
+      "S" + "A2B3C4D5E6F7G8H9I0J1K2L3M4N5O6P7Q8R9S0T1U2V3W4X5Y6Z7A8B9C";
     const err = new Error(`Failed with secret ${validSecret}`);
     err.stack = `Error: Failed\n    at Object.<anonymous> (${validSecret}:10:20)`;
 

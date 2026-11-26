@@ -1,9 +1,14 @@
 import { Request, Response, NextFunction } from "express";
+
 import { getCache } from "../services/cache";
 
 const inProgress = new Set<string>();
 
-export function idempotencyMiddleware(req: Request, res: Response, next: NextFunction): void {
+export function idempotencyMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
   const key = req.headers["idempotency-key"] as string | undefined;
   if (!key || req.method !== "POST") {
     next();
@@ -14,7 +19,9 @@ export function idempotencyMiddleware(req: Request, res: Response, next: NextFun
 
   (async () => {
     const cache = getCache();
-    const cached = await cache.get<any>(cacheKey);
+    const cached = await cache.get<{ status?: number; body?: unknown }>(
+      cacheKey,
+    );
     if (cached) {
       res.setHeader("Idempotency-Replayed", "true");
       res.status(cached.status ?? 200).json(cached.body);
@@ -27,7 +34,7 @@ export function idempotencyMiddleware(req: Request, res: Response, next: NextFun
     inProgress.add(cacheKey);
 
     const originalJson = res.json.bind(res);
-    res.json = (body: any) => {
+    res.json = (body: unknown) => {
       const status = res.statusCode;
       void cache.set(cacheKey, { status, body }, 5 * 60 * 1000);
       inProgress.delete(cacheKey);
@@ -36,4 +43,3 @@ export function idempotencyMiddleware(req: Request, res: Response, next: NextFun
     next();
   })().catch(() => next());
 }
-EOF

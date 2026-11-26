@@ -3,8 +3,8 @@ import { getRpcServer } from "@config/stellar";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { getCache, invalidateContractCache } from "./cache";
-import { logger } from "../utils/logger";
 import { env } from "../config/env";
+import { logger } from "../utils/logger";
 
 /** Standard method signatures for popular contract interactions */
 interface WarmMethod {
@@ -40,7 +40,10 @@ function parseWarmMethods(): WarmMethod[] {
   try {
     return JSON.parse(contractsEnv) as WarmMethod[];
   } catch {
-    logger.warn({ contractsEnv }, "Failed to parse CACHE_WARMING_CONTRACTS, using defaults");
+    logger.warn(
+      { contractsEnv },
+      "Failed to parse CACHE_WARMING_CONTRACTS, using defaults",
+    );
     return DEFAULT_WARM_METHODS;
   }
 }
@@ -50,18 +53,19 @@ async function buildAndSimulate(
   method: WarmMethod,
 ): Promise<void> {
   try {
-    const networkPassphrase = network === "mainnet"
-      ? StellarSdk.Networks.PUBLIC
-      : network === "testnet"
-        ? StellarSdk.Networks.TESTNET
-        : StellarSdk.Networks.FUTURENET;
+    const networkPassphrase =
+      network === "mainnet"
+        ? StellarSdk.Networks.PUBLIC
+        : network === "testnet"
+          ? StellarSdk.Networks.TESTNET
+          : StellarSdk.Networks.FUTURENET;
 
     const server = getRpcServer(network);
     const contractAddress = StellarSdk.Address.fromString(method.contractId);
-    
+
     const tx = new StellarSdk.TransactionBuilder(
-      StellarSdk.Keypair.random().publicKey(),
-      { fee: "100", networkPassphrase }
+      new StellarSdk.Account(StellarSdk.Keypair.random().publicKey(), "0"),
+      { fee: "100", networkPassphrase },
     )
       .addOperation(
         StellarSdk.Operation.invokeHostFunction({
@@ -82,7 +86,11 @@ async function buildAndSimulate(
   } catch (err) {
     // Silently ignore warming errors — don't spam logs
     logger.debug(
-      { contractId: method.contractId, method: method.method, err: (err as Error).message },
+      {
+        contractId: method.contractId,
+        method: method.method,
+        err: (err as Error).message,
+      },
       "Cache warming simulation failed",
     );
   }
@@ -97,7 +105,7 @@ async function warmCacheForNetwork(network: Network): Promise<void> {
 
   try {
     await Promise.allSettled(
-      methods.map((method) => buildAndSimulate(network, method))
+      methods.map((method) => buildAndSimulate(network, method)),
     );
     logger.debug({ network }, "Cache warming completed");
   } finally {

@@ -3,7 +3,18 @@ import { LruMemoryCache, buildCacheKey } from "./cache";
 jest.mock("ioredis");
 jest.mock("../middleware/metrics", () => ({
   __esModule: true,
-  default: { recordCacheLatency: jest.fn() },
+  default: {
+    recordCacheLatency: jest.fn(),
+    recordCacheOperation: jest.fn(),
+    recordMemoryCacheKeys: jest.fn(),
+    recordMemoryCacheBytes: jest.fn(),
+    recordL1Hit: jest.fn(),
+    recordL1Miss: jest.fn(),
+    recordL2Hit: jest.fn(),
+    recordL2Miss: jest.fn(),
+    recordCacheHit: jest.fn(),
+    recordCacheMiss: jest.fn(),
+  },
 }));
 jest.mock("../utils/logger", () => ({
   logger: { info: jest.fn(), warn: jest.fn() },
@@ -61,7 +72,16 @@ describe("async CacheService (in-memory backend)", () => {
     jest.resetModules();
     jest.mock("../middleware/metrics", () => ({
       __esModule: true,
-      default: { recordCacheLatency: jest.fn() },
+      default: {
+        recordCacheLatency: jest.fn(),
+        recordCacheOperation: jest.fn(),
+        recordMemoryCacheKeys: jest.fn(),
+        recordMemoryCacheBytes: jest.fn(),
+        recordL1Hit: jest.fn(),
+        recordL1Miss: jest.fn(),
+        recordL2Hit: jest.fn(),
+        recordL2Miss: jest.fn(),
+      },
     }));
     jest.mock("../utils/logger", () => ({
       logger: { info: jest.fn(), warn: jest.fn() },
@@ -111,7 +131,16 @@ describe("Redis fallback on connection error", () => {
     jest.doMock("ioredis", () => jest.fn().mockReturnValue(fakeClient));
     jest.doMock("../middleware/metrics", () => ({
       __esModule: true,
-      default: { recordCacheLatency: jest.fn() },
+      default: {
+        recordCacheLatency: jest.fn(),
+        recordCacheOperation: jest.fn(),
+        recordMemoryCacheKeys: jest.fn(),
+        recordMemoryCacheBytes: jest.fn(),
+        recordL1Hit: jest.fn(),
+        recordL1Miss: jest.fn(),
+        recordL2Hit: jest.fn(),
+        recordL2Miss: jest.fn(),
+      },
     }));
     jest.doMock("../utils/logger", () => ({
       logger: { info: jest.fn(), warn: jest.fn() },
@@ -165,6 +194,7 @@ describe("buildCacheKey", () => {
 function makeFakeRedisClient() {
   const { EventEmitter } = require("events") as typeof import("events");
   const store = new Map<string, string>();
+  const sets = new Map<string, Set<string>>();
   const client = Object.assign(new EventEmitter(), {
     status: "connecting",
     get: jest.fn(async (k: string) => (store.has(k) ? store.get(k)! : null)),
@@ -181,14 +211,54 @@ function makeFakeRedisClient() {
     }),
     flushdb: jest.fn(async () => {
       store.clear();
+      sets.clear();
       return "OK";
     }),
-    scan: jest.fn(async (cursor: string, ...args: unknown[]) => {
+    smembers: jest.fn(async (k: string) => Array.from(sets.get(k) ?? [])),
+    sadd: jest.fn(async (k: string, ...members: string[]) => {
+      let s = sets.get(k);
+      if (!s) {
+        s = new Set();
+        sets.set(k, s);
+      }
+      let added = 0;
+      for (const m of members) {
+        if (!s.has(m)) {
+          s.add(m);
+          added++;
+        }
+      }
+      return added;
+    }),
+    expire: jest.fn(async () => 1),
+    pipeline: jest.fn(() => {
+      const ops: Array<() => Promise<unknown>> = [];
+      const pipe = {
+        del: (...keys: string[]) => {
+          ops.push(() => client.del(...keys));
+          return pipe;
+        },
+        sadd: (k: string, ...members: string[]) => {
+          ops.push(() => client.sadd(k, ...members));
+          return pipe;
+        },
+        expire: () => {
+          ops.push(() => client.expire());
+          return pipe;
+        },
+        exec: async () =>
+          Promise.all(ops.map((fn) => fn().then((r) => [null, r]))),
+      };
+      return pipe;
+    }),
+    scan: jest.fn(async (_cursor: string, ...args: unknown[]) => {
       // Minimal SCAN implementation: returns all keys on first pass.
       const matchIdx = args.findIndex((a) => a === "MATCH");
       const pattern = matchIdx >= 0 ? String(args[matchIdx + 1]) : "*";
       const regex = new RegExp(
-        "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$",
+        "^" +
+          pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") +
+          "$",
       );
       const keys = Array.from(store.keys()).filter((k) => regex.test(k));
       return ["0", keys];
@@ -236,7 +306,16 @@ describe("boot without Redis (#58)", () => {
     jest.doMock("ioredis", () => jest.fn().mockReturnValue(fakeClient));
     jest.doMock("../middleware/metrics", () => ({
       __esModule: true,
-      default: { recordCacheLatency: jest.fn() },
+      default: {
+        recordCacheLatency: jest.fn(),
+        recordCacheOperation: jest.fn(),
+        recordMemoryCacheKeys: jest.fn(),
+        recordMemoryCacheBytes: jest.fn(),
+        recordL1Hit: jest.fn(),
+        recordL1Miss: jest.fn(),
+        recordL2Hit: jest.fn(),
+        recordL2Miss: jest.fn(),
+      },
     }));
     jest.doMock("../utils/logger", () => ({
       logger: { info: jest.fn(), warn: jest.fn() },
@@ -244,6 +323,7 @@ describe("boot without Redis (#58)", () => {
 
     const { getCache } = require("./cache");
 
+    getCache();
     // Simulate connection failure after construction.
     fakeClient.emit("error", new Error("ENOTFOUND invalid-host"));
 
@@ -255,7 +335,9 @@ describe("boot without Redis (#58)", () => {
     const { mod, fakeClient } = loadCacheModuleWithRedis();
     mod.getCache();
 
-    expect(() => fakeClient.emit("error", new Error("ECONNRESET"))).not.toThrow();
+    expect(() =>
+      fakeClient.emit("error", new Error("ECONNRESET")),
+    ).not.toThrow();
   });
 
   it("marks Redis unhealthy after an error without crashing", () => {
@@ -341,7 +423,8 @@ describe("invalidateContractCache (#60)", () => {
     const cache = mod.getCache();
     expect(cache.backend).toBe("redis");
 
-    const contractId = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+    const contractId =
+      "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
     await cache.set(`sim:${contractId}:1`, "a", 10_000);
     await cache.set(`sim:${contractId}:2`, "b", 10_000);
     await cache.set("sim:OTHER:1", "c", 10_000);

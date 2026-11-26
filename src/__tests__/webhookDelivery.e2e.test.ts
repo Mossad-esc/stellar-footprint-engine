@@ -35,7 +35,7 @@ const mockSimulate = simulateTransaction as jest.MockedFunction<
   typeof simulateTransaction
 >;
 
-const VALID_XDR = "AAAAAgAAAAC" + "A".repeat(40) + "==";
+const VALID_XDR = "AAAAAgAAAAC" + "A".repeat(39) + "==";
 const WEBHOOK_SECRET = "e2e-test-webhook-secret";
 
 const MOCK_SIMULATION_RESULT = {

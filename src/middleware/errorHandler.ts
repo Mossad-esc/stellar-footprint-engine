@@ -28,9 +28,7 @@ function isPayloadTooLargeError(err: unknown): err is BodyParserError {
   if (typeof err !== "object" || err === null) return false;
   const e = err as BodyParserError;
   return (
-    e.type === "entity.too.large" ||
-    e.status === 413 ||
-    e.statusCode === 413
+    e.type === "entity.too.large" || e.status === 413 || e.statusCode === 413
   );
 }
 

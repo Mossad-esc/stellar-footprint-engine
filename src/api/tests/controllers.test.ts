@@ -4,7 +4,10 @@ import request from "supertest";
 import app from "../../index";
 
 // Mock the simulator service before any imports resolve it
-jest.mock("@services/simulator");
+jest.mock("@services/simulator", () => ({
+  ...jest.requireActual("@services/simulator"),
+  simulateTransaction: jest.fn(),
+}));
 
 // Mock metrics to avoid prom-client side effects in tests
 jest.mock("@middleware/metrics", () => ({
@@ -277,7 +280,8 @@ describe("POST /api/v1/simulate", () => {
       success: false,
       type: "simulation_error" as const,
       error: "Transaction exceeded CPU instruction limit.",
-      remediation: "Consider splitting the operation into multiple transactions or optimizing loops.",
+      remediation:
+        "Consider splitting the operation into multiple transactions or optimizing loops.",
       resourceExceeded: "cpu_instructions",
       code: "RESOURCE_LIMIT_EXCEEDED",
     };
@@ -291,7 +295,8 @@ describe("POST /api/v1/simulate", () => {
     expect(res.body).toMatchObject({
       success: false,
       error: "Transaction exceeded CPU instruction limit.",
-      remediation: "Consider splitting the operation into multiple transactions or optimizing loops.",
+      remediation:
+        "Consider splitting the operation into multiple transactions or optimizing loops.",
       resourceExceeded: "cpu_instructions",
       code: "RESOURCE_LIMIT_EXCEEDED",
     });
@@ -1120,11 +1125,9 @@ describe("GET /api/v1/contract/:contractId/ttl", () => {
   });
 
   it("returns 404 when contract is not found", async () => {
-    // Mock the RPC client to return null (contract not found)
-    jest.doMock("@services/rpcClient", () => ({
-      ...jest.requireActual("@services/rpcClient"),
-      fetchContractTtl: jest.fn().mockResolvedValue(null),
-    }));
+    const rpcClient =
+      require("@services/rpcClient") as typeof import("@services/rpcClient");
+    jest.spyOn(rpcClient, "fetchContractTtl").mockResolvedValueOnce(null);
 
     const res = await request(app).get(
       `/api/v1/contract/${VALID_CONTRACT_ID}/ttl`,
@@ -1135,16 +1138,14 @@ describe("GET /api/v1/contract/:contractId/ttl", () => {
   });
 
   it("returns TTL information for valid contract", async () => {
-    // Mock the RPC client to return TTL info
-    jest.doMock("@services/rpcClient", () => ({
-      ...jest.requireActual("@services/rpcClient"),
-      fetchContractTtl: jest.fn().mockResolvedValue({
-        liveUntilLedger: 12345678,
-        remainingLedgers: 50000,
-        estimatedExpirationDate: "2024-06-15T10:30:00.000Z",
-        currentLedger: 12295678,
-      }),
-    }));
+    const rpcClient =
+      require("@services/rpcClient") as typeof import("@services/rpcClient");
+    jest.spyOn(rpcClient, "fetchContractTtl").mockResolvedValueOnce({
+      liveUntilLedger: 12345678,
+      remainingLedgers: 50000,
+      estimatedExpirationDate: "2024-06-15T10:30:00.000Z",
+      currentLedger: 12295678,
+    });
 
     const res = await request(app).get(
       `/api/v1/contract/${VALID_CONTRACT_ID}/ttl`,
@@ -1175,9 +1176,7 @@ describe("POST /api/v1/decode/batch", () => {
   });
 
   it("returns 400 when items array is missing", async () => {
-    const res = await request(app)
-      .post("/api/v1/decode/batch")
-      .send({});
+    const res = await request(app).post("/api/v1/decode/batch").send({});
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
@@ -1197,9 +1196,7 @@ describe("POST /api/v1/decode/batch", () => {
       .fill(null)
       .map((_, i) => ({ id: `tx-${i}`, xdr: VALID_TX_XDR }));
 
-    const res = await request(app)
-      .post("/api/v1/decode/batch")
-      .send({ items });
+    const res = await request(app).post("/api/v1/decode/batch").send({ items });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("INVALID_QUERY_PARAMETERS");
@@ -1264,8 +1261,23 @@ describe("POST /api/v1/decode/batch", () => {
   });
 
   it("accepts large XDRs in request body that exceed GET query string limits", async () => {
-    // Create a larger XDR (simulating a complex transaction)
-    const largeXdr = VALID_TX_XDR.repeat(10);
+    // Create a larger valid XDR (simulating a complex multi-op transaction > 2KB)
+    const StellarSdk =
+      require("@stellar/stellar-sdk") as typeof import("@stellar/stellar-sdk");
+    const kp = StellarSdk.Keypair.random();
+    const builder = new StellarSdk.TransactionBuilder(
+      new StellarSdk.Account(kp.publicKey(), "1"),
+      { fee: "100", networkPassphrase: StellarSdk.Networks.TESTNET },
+    );
+    for (let i = 0; i < 40; i++) {
+      builder.addOperation(
+        StellarSdk.Operation.manageData({
+          name: `k${i}`,
+          value: "v".repeat(40),
+        }),
+      );
+    }
+    const largeXdr = builder.setTimeout(0).build().toXDR();
 
     const res = await request(app)
       .post("/api/v1/decode/batch")

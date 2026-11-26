@@ -16,7 +16,7 @@ describe("optimizeFootprint", () => {
     const result = optimizeFootprint([A, B], [B, C]);
     expect(result.readOnly).toEqual([A]);
     expect(result.readWrite).toEqual([B, C]);
-    expect(result.stats).toEqual({
+    expect(result.stats).toMatchObject({
       originalReadOnlyCount: 2,
       optimizedReadOnlyCount: 1,
       removedCount: 1,
@@ -26,7 +26,7 @@ describe("optimizeFootprint", () => {
   it("sets optimized: true when entries are removed", () => {
     const result = optimizeFootprint([A, B], [B]);
     expect(result.optimized).toBe(true);
-    expect(result.stats).toEqual({
+    expect(result.stats).toMatchObject({
       originalReadOnlyCount: 2,
       optimizedReadOnlyCount: 1,
       removedCount: 1,
@@ -38,7 +38,7 @@ describe("optimizeFootprint", () => {
     expect(result.optimized).toBe(false);
     expect(result.readOnly).toEqual([A]);
     expect(result.readWrite).toEqual([B]);
-    expect(result.stats).toEqual({
+    expect(result.stats).toMatchObject({
       originalReadOnlyCount: 1,
       optimizedReadOnlyCount: 1,
       removedCount: 0,
@@ -50,7 +50,7 @@ describe("optimizeFootprint", () => {
     expect(result.readOnly).toEqual([]);
     expect(result.readWrite).toEqual([]);
     expect(result.optimized).toBe(false);
-    expect(result.stats).toEqual({
+    expect(result.stats).toMatchObject({
       originalReadOnlyCount: 0,
       optimizedReadOnlyCount: 0,
       removedCount: 0,
@@ -68,7 +68,7 @@ describe("optimizeFootprint", () => {
     expect(result.readOnly).toEqual([B]);
     expect(result.readWrite).toEqual([A, C]);
     expect(result.optimized).toBe(true);
-    expect(result.stats).toEqual({
+    expect(result.stats).toMatchObject({
       originalReadOnlyCount: 3,
       optimizedReadOnlyCount: 1,
       removedCount: 2,

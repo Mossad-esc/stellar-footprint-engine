@@ -35,12 +35,14 @@ export async function getLatestLedgerCached(
   const latest = await server.getLatestLedger();
   const entry: LedgerCacheEntry = {
     sequence: latest.sequence,
-    closeTime: (latest as { closeTime?: number }).closeTime ?? now,
+    closeTime: (latest as unknown as { closeTime?: number }).closeTime ?? now,
     timestamp: now,
   };
   ledgerCache.set(network, entry);
   return { sequence: entry.sequence, closeTime: entry.closeTime };
 }
+
+export interface NetworkStatusResult {
   ledger: number;
   baseFee: string;
   networkPassphrase: string;
