@@ -32,7 +32,7 @@ echo "🔍 Running TypeScript typecheck..."
 pnpm run typecheck
 
 echo "🧪 Running fast unit tests..."
-pnpm test -- --testPathPattern='unit' --bail --passWithNoTests
+pnpm test --testPathPatterns='unit' --bail --passWithNoTests
 
 echo "✅ Pre-push checks passed. (Use 'git push --no-verify' only for urgent bypasses.)"
 
