@@ -21,7 +21,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22.x"
-          cache: pnpm
 
       - name: Run pnpm audit (high/critical gate)
         run: pnpm audit --audit-level=high
