@@ -76,7 +76,7 @@ export function supportedNetworks(_req: Request, res: Response): void {
   if (process.env.TESTNET_RPC_URL) networks.push("testnet");
   if (process.env.MAINNET_RPC_URL) networks.push("mainnet");
   if (process.env.FUTURENET_RPC_URL) networks.push("futurenet");
-  res.status(HTTP_STATUS.OK).json({ networks });
+  res.status(HTTP_STATUS.OK).json({ success: true, networks });
 }
 
 export function health(_req: Request, res: Response): void {
@@ -551,6 +551,10 @@ export async function networkStatus(
     const response: ResponseEnvelope = { success: true, data: status };
     res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -623,6 +627,10 @@ export async function footprintDiffController(
     };
     res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -669,6 +677,10 @@ export async function validate(
     };
     res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -705,6 +717,10 @@ export async function restore(
     const response: ResponseEnvelope = { success: true, data: result };
     res.status(HTTP_STATUS.OK).json(response);
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -723,6 +739,10 @@ export async function invalidateCache(
       .status(HTTP_STATUS.OK)
       .json({ message: "Cache invalidated", backend: cache.backend });
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -786,6 +806,10 @@ export async function invalidateContractCacheController(
       purgedKeysCount: count,
     });
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -979,6 +1003,10 @@ export async function estimateFeeController(
     );
     res.status(HTTP_STATUS.OK).json(result);
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -999,8 +1027,9 @@ export function decode(req: Request, res: Response, next: NextFunction): void {
   }
 
   const { xdr, type = "transaction" } = validation.data;
+  const normalizedXdr = xdr.replace(/ /g, "+");
 
-  const xdrCheck = validateXdrInput(xdr);
+  const xdrCheck = validateXdrInput(normalizedXdr);
   if (!xdrCheck.valid) {
     return next(new AppError(xdrCheck.error!, HTTP_STATUS.BAD_REQUEST));
   }
@@ -1020,7 +1049,7 @@ export function decode(req: Request, res: Response, next: NextFunction): void {
     );
   }
 
-  const result = decodeXdr(xdr!, type as XdrType);
+  const result = decodeXdr(normalizedXdr, type as XdrType);
 
   if (!result.success) {
     return next(
@@ -1070,6 +1099,10 @@ export async function costBreakdownController(
     const result = await estimateFeeDetailed(cpuInsns, memBytes, net);
     res.status(HTTP_STATUS.OK).json(result);
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -1192,6 +1225,10 @@ export function getSimulateHistory(
 
     res.status(HTTP_STATUS.OK).json({ page, limit, total, hasMore, data });
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -1403,6 +1440,10 @@ export function rpcStatus(
     const stats = getRpcStats();
     res.status(HTTP_STATUS.OK).json({ success: true, data: stats });
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -1504,6 +1545,10 @@ export async function contractTtl(
       },
     });
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
@@ -1568,6 +1613,10 @@ export async function simulateDependentBatchController(
     const results = await simulateDependentBatch(transactions, net);
     res.status(HTTP_STATUS.OK).json({ success: true, data: { results } });
   } catch (err: unknown) {
+    if (err instanceof AppError) {
+      next(err);
+      return;
+    }
     const message =
       err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
     next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));

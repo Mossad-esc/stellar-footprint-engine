@@ -1,6 +1,8 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { Network, getNetworkConfig, getRpcServer } from "../config/stellar";
+import { HTTP_STATUS } from "../constants";
+import { AppError } from "../utils/AppError";
 import { sanitizeRpcError } from "../utils/rpcErrorSanitizer";
 
 export interface RestoreResult {
@@ -56,7 +58,10 @@ export async function buildRestoreTransaction(
 
   if (!preamble) {
     if ("error" in response && response.error) {
-      throw new Error(sanitizeRpcError(response.error).message);
+      throw new AppError(
+        sanitizeRpcError(response.error).message,
+        HTTP_STATUS.UNPROCESSABLE_ENTITY,
+      );
     }
     return { needsRestore: false };
   }

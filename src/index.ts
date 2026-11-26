@@ -231,6 +231,11 @@ function brotliMiddleware(
 
     brotli.on("data", (chunk: Buffer) => compressed.push(chunk));
     brotli.on("end", () => {
+      if (res.headersSent) {
+        originalWrite(body);
+        originalEnd();
+        return;
+      }
       const result = Buffer.concat(compressed);
       res.setHeader("Content-Encoding", "br");
       res.removeHeader("Content-Length");
@@ -304,7 +309,15 @@ function brotliMiddleware(
 }
 
 app.use(brotliMiddleware);
-app.use(compression({ threshold: COMPRESSION_THRESHOLD }));
+const gzipCompression = compression({ threshold: COMPRESSION_THRESHOLD });
+app.use((req, res, next) => {
+  const acceptEncoding = (req.headers["accept-encoding"] as string) ?? "";
+  if (acceptEncoding.includes("br") && !req.path.startsWith("/api/v1/health")) {
+    next();
+    return;
+  }
+  gzipCompression(req, res, next);
+});
 
 // Route-specific body parsers: batch endpoints accept larger payloads (2MB)
 // while all other routes are capped at 250kb to prevent memory-based DoS.

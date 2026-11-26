@@ -42,9 +42,13 @@ function getOutputPath(): string | undefined {
 async function runBenchmarks(): Promise<void> {
   const networkPassphrase = StellarSdk.Networks.TESTNET;
   const footprintData = sacFootprint(StellarSdk.Asset.native()).build();
-  const footprint = footprintData.footprint();
-  const readOnly = footprint.readOnly().map((key) => key.toXDR("base64"));
-  const readWrite = footprint.readWrite().map((key) => key.toXDR("base64"));
+  const footprint = footprintData.resources.footprint;
+  const readOnly = footprint.readOnly.map((key: StellarSdk.xdr.LedgerKey) =>
+    key.toXDR("base64"),
+  );
+  const readWrite = footprint.readWrite.map((key: StellarSdk.xdr.LedgerKey) =>
+    key.toXDR("base64"),
+  );
   const allEntries = [...readOnly, ...readWrite];
   const sampleLedgerKey = readOnly[0];
 
