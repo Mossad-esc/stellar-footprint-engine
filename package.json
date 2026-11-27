@@ -85,7 +85,7 @@
     "@types/swagger-ui-express": "^4.1.8",
     "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^8.58.2",
-    "@typescript-eslint/parser": "^8.59.0",
+    "@typescript-eslint/parser": "^8.74.0",
     "autocannon": "^8.0.0",
     "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",
